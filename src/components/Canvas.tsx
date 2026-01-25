@@ -525,7 +525,35 @@ export function Canvas() {
       answers.push({ text, blockIds: ids.length ? ids : scopeIds.slice(0, 1) })
     }
 
-    if (/what.*about|core idea|orientation|one sentence/i.test(normQuestion)) {
+    const isGoalIntent = (() => {
+      const phrases = [
+        'main goal',
+        'the goal',
+        'goal',
+        'purpose',
+        'aim',
+        'objective',
+        'intended outcome',
+        'success criteria',
+        'what are we trying to do',
+        'what is this for',
+        'why are we doing',
+        'why do this',
+      ]
+      return phrases.some((p) => normQuestion.includes(p))
+    })()
+
+    if (isGoalIntent) {
+      const goalLines = lineEntries.filter((e) =>
+        /(what this seems to be about|what this file seems to be about|goal|purpose|objective|aim)/i.test(e.line)
+      )
+      if (goalLines.length) {
+        goalLines.slice(0, 2).forEach((e) => add(e.line, e.blockIds))
+      } else {
+        const fallbackIds = scopeIds.length ? scopeIds.slice(0, 2) : []
+        add('The main goal is not stated explicitly in the selected blocks.', fallbackIds)
+      }
+    } else if (/what.*about|core idea|orientation|one sentence/i.test(normQuestion)) {
       const about = pickByKeywords(['what this seems to be about'])
       const picked = about.length ? about.slice(0, 2) : lineEntries.slice(0, 2)
       picked.forEach((e) => add(e.line, e.blockIds))
