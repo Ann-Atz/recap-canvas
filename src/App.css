@@ -1,10 +1,10 @@
 :root {
-  --bg: #f7f8fa;
-  --panel: #ffffff;
+  --bg: rgb(255, 255, 255);
+  --panel: #e2e3e4;
   --canvas: #e2e3e4;
   --grid: rgba(31, 35, 40, 0.04);
-  --text: #1f2328;
-  --muted: #5a6472;
+  --text: #01050a;
+  --muted: #4d596a;
   --border: #d0d7de;
   --shadow: 0 6px 18px rgba(15, 23, 42, 0.08);
   --shadow-strong: 0 10px 26px rgba(15, 23, 42, 0.12);
@@ -422,12 +422,14 @@
   z-index: 3;
   background: var(--primary);
   color: var(--primary-contrast);
-  border: none;
-  padding: 8px 12px;
-  border-radius: 8px;
+  border: 1px solid rgba(11, 95, 255, 0.5);
+  padding: 10px 14px;
+  border-radius: 10px;
   font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 0.01em;
   cursor: pointer;
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 12px 28px rgba(11, 95, 255, 0.22), 0 0 0 2px rgba(11, 95, 255, 0.18);
 }
 
 .summarize-action:hover {

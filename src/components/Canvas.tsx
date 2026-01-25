@@ -8,6 +8,8 @@ import { loadState, loadZoom, saveState, saveZoom, STORAGE_KEY } from '../state/
 
 const CANVAS_WIDTH = 2600
 const CANVAS_HEIGHT = 1800
+const MIN_ZOOM = 0.4
+const MAX_ZOOM = 1.4
 type Tool = 'select' | 'text' | 'image' | 'link'
 
 export function Canvas() {
@@ -175,7 +177,7 @@ export function Canvas() {
 
   const adjustZoom = (delta: number) => {
     setZoom((prev) => {
-      const next = Math.min(2, Math.max(0.5, Math.round((prev + delta) * 10) / 10))
+      const next = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.round((prev + delta) * 10) / 10))
       return next
     })
   }
@@ -270,10 +272,82 @@ export function Canvas() {
     setActiveTool(tool)
   }
 
+  const handleWheelZoom = (event: React.WheelEvent<HTMLDivElement>) => {
+    if (!(event.ctrlKey || event.metaKey)) return
+    event.preventDefault()
+    const scrollEl = scrollRef.current
+    if (!scrollEl) return
+
+    const zoomDelta = -event.deltaY * 0.0015
+    if (zoomDelta === 0) return
+    const nextZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom + zoomDelta))
+    if (nextZoom === zoom) return
+
+    const rect = scrollEl.getBoundingClientRect()
+    const pointerX = event.clientX - rect.left
+    const pointerY = event.clientY - rect.top
+    const canvasX = (scrollEl.scrollLeft + pointerX) / zoom
+    const canvasY = (scrollEl.scrollTop + pointerY) / zoom
+
+    setZoom(nextZoom)
+
+    const targetLeft = canvasX * nextZoom - pointerX
+    const targetTop = canvasY * nextZoom - pointerY
+    const maxScrollLeft = Math.max(0, CANVAS_WIDTH * nextZoom - scrollEl.clientWidth)
+    const maxScrollTop = Math.max(0, CANVAS_HEIGHT * nextZoom - scrollEl.clientHeight)
+    scrollEl.scrollTo({
+      left: Math.max(0, Math.min(targetLeft, maxScrollLeft)),
+      top: Math.max(0, Math.min(targetTop, maxScrollTop)),
+    })
+  }
+
   const handleUpdateBlock = (id: string, updater: (block: Block) => Block) => {
     setBlocks((prev) =>
       prev.map((block) => (block.id === id ? updater({ ...block, updatedAt: new Date().toISOString() }) : block))
     )
+  }
+
+  const ensureRectInView = (rect: { x: number; y: number; width: number; height: number }) => {
+    const scrollEl = scrollRef.current
+    if (!scrollEl) return
+    const padding = 80
+    const padded = {
+      x: Math.max(0, rect.x - padding),
+      y: Math.max(0, rect.y - padding),
+      width: Math.min(CANVAS_WIDTH, rect.width + padding * 2),
+      height: Math.min(CANVAS_HEIGHT, rect.height + padding * 2),
+    }
+    const viewLeft = scrollEl.scrollLeft / zoom
+    const viewTop = scrollEl.scrollTop / zoom
+    const viewWidth = scrollEl.clientWidth / zoom
+    const viewHeight = scrollEl.clientHeight / zoom
+    const viewRight = viewLeft + viewWidth
+    const viewBottom = viewTop + viewHeight
+    const paddedRight = padded.x + padded.width
+    const paddedBottom = padded.y + padded.height
+
+    const alreadyVisible =
+      viewLeft <= padded.x &&
+      viewTop <= padded.y &&
+      viewRight >= paddedRight &&
+      viewBottom >= paddedBottom
+    if (alreadyVisible) return
+
+    const zoomToFit = Math.min(scrollEl.clientWidth / padded.width, scrollEl.clientHeight / padded.height)
+    const nextZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoomToFit))
+
+    const centerX = padded.x + padded.width / 2
+    const centerY = padded.y + padded.height / 2
+    const targetLeft = centerX * nextZoom - scrollEl.clientWidth / 2
+    const targetTop = centerY * nextZoom - scrollEl.clientHeight / 2
+    const maxScrollLeft = Math.max(0, CANVAS_WIDTH * nextZoom - scrollEl.clientWidth)
+    const maxScrollTop = Math.max(0, CANVAS_HEIGHT * nextZoom - scrollEl.clientHeight)
+
+    setZoom(nextZoom)
+    scrollEl.scrollTo({
+      left: Math.max(0, Math.min(targetLeft, maxScrollLeft)),
+      top: Math.max(0, Math.min(targetTop, maxScrollTop)),
+    })
   }
 
   const handleSummarize = () => {
@@ -296,6 +370,21 @@ export function Canvas() {
       updatedAt: new Date().toISOString(),
     }
     setBlocks((prev) => [...prev, newSummary])
+
+    const selectionRect = selectionBounds
+    const summaryRect = {
+      x: position.x,
+      y: position.y,
+      width: summarySize.width,
+      height: summarySize.height,
+    }
+    const targetRect = {
+      x: Math.min(selectionRect.minX, summaryRect.x),
+      y: Math.min(selectionRect.minY, summaryRect.y),
+      width: Math.max(selectionRect.maxX, summaryRect.x + summaryRect.width) - Math.min(selectionRect.minX, summaryRect.x),
+      height: Math.max(selectionRect.maxY, summaryRect.y + summaryRect.height) - Math.min(selectionRect.minY, summaryRect.y),
+    }
+    ensureRectInView(targetRect)
   }
 
   useEffect(() => {
@@ -361,7 +450,7 @@ export function Canvas() {
               }
             }}
           >
-            Reset (dev)
+            Reset Canvas
           </button>
         </div>
       )}
@@ -376,13 +465,15 @@ export function Canvas() {
         onPointerMove={handleCanvasPointerMove}
         onPointerUp={handleCanvasPointerEnd}
         onPointerCancel={handleCanvasPointerEnd}
+        onWheel={handleWheelZoom}
       >
         {selectionBounds && selectedIds.length >= 2 && (
           <button
             className="summarize-action"
             style={{
-              left: selectionBounds.maxX + 12,
-              top: Math.max(selectionBounds.minY - 36, 8),
+              left: (selectionBounds.minX + selectionBounds.maxX) / 2,
+              top: Math.max(selectionBounds.minY - 12, 6),
+              transform: 'translate(-50%, 0)',
             }}
             onClick={(e) => {
               e.stopPropagation()
@@ -390,7 +481,7 @@ export function Canvas() {
             }}
             onPointerDown={(e) => e.stopPropagation()}
           >
-            Summarize this area
+            Summarize selection
           </button>
         )}
         {blocks.map((block) => (

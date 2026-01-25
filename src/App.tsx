@@ -7,7 +7,7 @@ function App() {
       <header className="app-header">
         <div>
           <p className="eyebrow">Recap Canvas · Prototype</p>
-          <h1>Canvas overview</h1>
+          <h1>Borderless Light Workshop (Handover)</h1>
         </div>
       </header>
 
