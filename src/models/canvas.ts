@@ -19,6 +19,7 @@ export type TextBlock = BlockBase & {
 export type ImageBlock = BlockBase & {
   type: 'image'
   src: string
+  aspectRatio?: number
 }
 
 export type LinkBlock = BlockBase & {
@@ -89,9 +90,9 @@ export const seedBlocks: Block[] = [
     type: 'image',
     src: 'https://i.pinimg.com/736x/c4/c0/61/c4c061e511152c34718ede2238c5fa1c.jpg',
     x: 1850,
-    y: 200, 
+    y: 200,
     width: 360,
-    height: 500,
+    aspectRatio: 1.39,
     createdAt: now,
     updatedAt: now,
   },

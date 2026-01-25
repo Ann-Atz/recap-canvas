@@ -63,6 +63,13 @@ export function BlockView({
     }
   }
 
+  const getImageHeight = (imageBlock: Extract<Block, { type: 'image' }>) => {
+    const ratio =
+      imageBlock.aspectRatio ??
+      (typeof imageBlock.height === 'number' && imageBlock.height > 0 ? imageBlock.height / imageBlock.width : 0.75)
+    return imageBlock.width * ratio
+  }
+
   const handlePointerDown = (event: PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0 && event.pointerType !== 'touch') {
       startAnchorRef.current = null
@@ -106,8 +113,10 @@ export function BlockView({
     if (event.button !== 0 && event.pointerType !== 'touch') return
     resizePointerIdRef.current = event.pointerId
     const baseHeight =
-      block.height ??
-      (block.type === 'text' && textareaRef.current ? textareaRef.current.scrollHeight + 34 : 120)
+      block.type === 'image'
+        ? getImageHeight(block)
+        : block.height ??
+          (block.type === 'text' && textareaRef.current ? textareaRef.current.scrollHeight + 34 : 120)
     startResizeRef.current = { x: event.clientX, y: event.clientY, width: block.width, height: baseHeight }
     setIsResizing(true)
     disableSelection()
@@ -120,8 +129,23 @@ export function BlockView({
     const dx = (event.clientX - startResizeRef.current.x) / zoom
     const dy = (event.clientY - startResizeRef.current.y) / zoom
     const newWidth = Math.max(180, startResizeRef.current.width + dx)
-    const newHeight = Math.max(120, startResizeRef.current.height + dy)
-    onUpdate(block.id, (current) => ({ ...current, width: newWidth, height: newHeight }))
+    const newHeight =
+      block.type === 'image'
+        ? newWidth *
+          (block.aspectRatio ??
+            (startResizeRef.current.height > 0 ? startResizeRef.current.height / startResizeRef.current.width : 0.75))
+        : Math.max(120, startResizeRef.current.height + dy)
+    onUpdate(block.id, (current) => {
+      if (current.type === 'image') {
+        const ratio =
+          current.aspectRatio ??
+          (startResizeRef.current
+            ? startResizeRef.current.height / startResizeRef.current.width
+            : newHeight / Math.max(newWidth, 1))
+        return { ...current, width: newWidth, height: undefined, aspectRatio: ratio }
+      }
+      return { ...current, width: newWidth, height: newHeight }
+    })
   }
 
   const handleResizePointerUp = (event: PointerEvent<HTMLDivElement>) => {
@@ -202,6 +226,18 @@ export function BlockView({
     })
   }
 
+  const handleImageLoad = (event: React.SyntheticEvent<HTMLImageElement>) => {
+    if (block.type !== 'image') return
+    const img = event.currentTarget
+    if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+      const ratio = img.naturalHeight / img.naturalWidth
+      onUpdate(block.id, (current) => {
+        if (current.type !== 'image') return current
+        return { ...current, aspectRatio: ratio, height: undefined }
+      })
+    }
+  }
+
   const handleDeleteClick = (event: MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation()
     onDelete(block.id)
@@ -246,11 +282,16 @@ export function BlockView({
     }
   }
 
+  const renderedHeight =
+    block.type === 'image'
+      ? getImageHeight(block)
+      : block.height
+
   const style: React.CSSProperties = {
     left: block.x,
     top: block.y,
     width: block.width,
-    ...(block.height ? { height: block.height } : {}),
+    ...(renderedHeight ? { height: renderedHeight } : {}),
   }
 
   return (
@@ -307,7 +348,7 @@ export function BlockView({
           {!isEditingImage && (
             <>
               {!imageError ? (
-                <img src={block.src} alt={block.id} onError={() => setImageError(true)} />
+                <img src={block.src} alt={block.id} onError={() => setImageError(true)} onLoad={handleImageLoad} />
               ) : (
                 <div className="block-image-placeholder">Image failed to load</div>
               )}

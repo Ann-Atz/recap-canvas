@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import type React from 'react'
 import type { PointerEvent } from 'react'
 import type { Block, SummaryBlock } from '../models/canvas'
 import { createId, seedBlocks } from '../models/canvas'
@@ -98,7 +99,8 @@ export function Canvas() {
     const url = window.prompt('Image URL?')
     if (!url) return
     const now = new Date().toISOString()
-    const pos = clampPosition(position.x, position.y, 320, 240)
+    const defaultAspect = 0.75
+    const pos = clampPosition(position.x, position.y, 320, 320 * defaultAspect)
     const block: Block = {
       id: createId('IMG'),
       type: 'image',
@@ -106,7 +108,8 @@ export function Canvas() {
       x: pos.x,
       y: pos.y,
       width: 320,
-      height: 240,
+      height: undefined,
+      aspectRatio: defaultAspect,
       createdAt: now,
       updatedAt: now,
     }
@@ -138,7 +141,15 @@ export function Canvas() {
   }
 
   const getSelectedBlocks = (): Block[] => blocks.filter((b) => selectedIds.includes(b.id))
-  const getBlockHeight = (block: Block) => block.height ?? 120
+  const getBlockHeight = (block: Block) => {
+    if (block.type === 'image') {
+      const ratio =
+        block.aspectRatio ??
+        (typeof block.height === 'number' && block.height > 0 ? block.height / block.width : 0.75)
+      return block.width * ratio
+    }
+    return block.height ?? 120
+  }
   const focusedSummary = (() => {
     const summaries = getSelectedBlocks().filter((b): b is SummaryBlock => b.type === 'summary')
     return summaries[0] ?? null
@@ -431,7 +442,6 @@ export function Canvas() {
         <button className="zoom-btn" onClick={() => adjustZoom(-0.1)}>
           Zoom -
         </button>
-        <span className="zoom-label">{Math.round(zoom * 100)}%</span>
       </div>
       {import.meta.env.DEV && (
         <div className="dev-reset">

@@ -209,7 +209,13 @@
   background: #ffffff;
 }
 
+.block-image {
+  padding: 10px;
+  border-radius: 8px;
+}
+
 .block-image img {
+  display: block;
   width: 100%;
   height: auto;
   border-radius: 8px;
@@ -491,7 +497,7 @@
   bottom: 24px;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   z-index: 5;
 }
 
@@ -507,11 +513,6 @@
 
 .zoom-btn:hover {
   background: #f3f4f6;
-}
-
-.zoom-label {
-  color: var(--text);
-  font-size: 14px;
 }
 
 .dev-reset {
