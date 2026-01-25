@@ -11,9 +11,19 @@ const CANVAS_HEIGHT = 1800
 type Tool = 'select' | 'text' | 'image' | 'link'
 
 export function Canvas() {
-  const [blocks, setBlocks] = useState<Block[]>(() => loadState() ?? seedBlocks)
+  const initialBlocksRef = useRef<Block[] | null>(null)
+  const initialZoomRef = useRef<number | null>(null)
+  if (initialBlocksRef.current === null) initialBlocksRef.current = loadState()
+  if (initialZoomRef.current === null) initialZoomRef.current = loadZoom()
+
+  const [blocks, setBlocks] = useState<Block[]>(() => initialBlocksRef.current ?? seedBlocks)
   const [activeTool, setActiveTool] = useState<Tool>('select')
-  const [zoom, setZoom] = useState<number>(() => loadZoom() ?? 1)
+  const [zoom, setZoom] = useState<number>(() => {
+    const stored = initialZoomRef.current
+    const fallback = 0.75
+    const value = stored ?? fallback
+    return Math.min(2, Math.max(0.5, value))
+  })
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [selection, setSelection] = useState<{
     active: boolean
@@ -24,6 +34,7 @@ export function Canvas() {
     currentY: number
   }>({ active: false, pointerId: null, originX: 0, originY: 0, currentX: 0, currentY: 0 })
   const scrollRef = useRef<HTMLDivElement | null>(null)
+  const didInitialCenterRef = useRef(false)
 
   const handlePositionChange = (id: string, x: number, y: number) => {
     setBlocks((prev) =>
@@ -84,14 +95,12 @@ export function Canvas() {
   const addImageBlock = (position: { x: number; y: number }) => {
     const url = window.prompt('Image URL?')
     if (!url) return
-    const caption = window.prompt('Caption (optional)') || undefined
     const now = new Date().toISOString()
     const pos = clampPosition(position.x, position.y, 320, 240)
     const block: Block = {
       id: createId('IMG'),
       type: 'image',
       src: url,
-      caption: caption?.trim() ? caption.trim() : undefined,
       x: pos.x,
       y: pos.y,
       width: 320,
@@ -289,6 +298,24 @@ export function Canvas() {
     setBlocks((prev) => [...prev, newSummary])
   }
 
+  useEffect(() => {
+    if (didInitialCenterRef.current) return
+    if (initialBlocksRef.current) return
+    const el = scrollRef.current
+    if (!el || blocks.length === 0) return
+    const minX = Math.min(...blocks.map((b) => b.x))
+    const maxX = Math.max(...blocks.map((b) => b.x + b.width))
+    const minY = Math.min(...blocks.map((b) => b.y))
+    const maxY = Math.max(...blocks.map((b) => b.y + getBlockHeight(b)))
+    const centerX = (minX + maxX) / 2
+    const centerY = (minY + maxY) / 2
+    const targetLeft = centerX * zoom - el.clientWidth / 2
+    const targetTop = centerY * zoom - el.clientHeight / 2
+    el.scrollLeft = Math.max(0, targetLeft)
+    el.scrollTop = Math.max(0, targetTop)
+    didInitialCenterRef.current = true
+  }, [blocks, zoom])
+
   return (
     <div className="canvas-scroll" role="region" aria-label="Canvas" ref={scrollRef}>
       <div className="toolbox">
@@ -322,7 +349,7 @@ export function Canvas() {
           <button
             className="dev-reset-btn"
             onClick={() => {
-              const confirmReset = window.confirm('Reset canvas? This will erase saved state.')
+              const confirmReset = window.confirm('Resets the canvas to the original handover state. Changes made this session will be cleared.')
               if (!confirmReset) return
               try {
                 window.localStorage.removeItem(STORAGE_KEY)

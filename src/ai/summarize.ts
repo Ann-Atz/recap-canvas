@@ -1,4 +1,4 @@
-import type { Block, SummarySections, TextBlock, ImageBlock, LinkBlock } from '../models/canvas'
+import type { Block, SummarySections, TextBlock, LinkBlock } from '../models/canvas'
 
 export type SummaryContent = {
   title: string
@@ -11,7 +11,7 @@ export function summarizeSelection(blocks: Block[]): SummaryContent {
   const lowerSignals = (text: string) => text.toLowerCase()
   const contentForBlock = (block: Block) => {
     if (block.type === 'text') return (block as TextBlock).text
-    if (block.type === 'image') return (block as ImageBlock).caption ?? ''
+    if (block.type === 'image') return ''
     if (block.type === 'link') {
       const l = block as LinkBlock
       return `${l.label} ${l.url}`

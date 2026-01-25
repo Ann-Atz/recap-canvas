@@ -45,9 +45,8 @@ export function BlockView({
   const [isEditingImage, setIsEditingImage] = useState(false)
   const [imageError, setImageError] = useState(false)
   const linkDraft = useRef<{ label: string; url: string }>({ label: block.type === 'link' ? block.label : '', url: block.type === 'link' ? block.url : '' })
-  const imageDraft = useRef<{ src: string; caption: string }>({
+  const imageDraft = useRef<{ src: string }>({
     src: block.type === 'image' ? block.src : '',
-    caption: block.type === 'image' && block.caption ? block.caption : '',
   })
 
   const disableSelection = () => {
@@ -308,16 +307,15 @@ export function BlockView({
           {!isEditingImage && (
             <>
               {!imageError ? (
-                <img src={block.src} alt={block.caption || block.id} onError={() => setImageError(true)} />
+                <img src={block.src} alt={block.id} onError={() => setImageError(true)} />
               ) : (
                 <div className="block-image-placeholder">Image failed to load</div>
               )}
-              {block.caption && <p className="block-caption">{block.caption}</p>}
               <button
                 className="block-edit"
                 onClick={(e) => {
                   e.stopPropagation()
-                  imageDraft.current = { src: block.src, caption: block.caption ?? '' }
+                  imageDraft.current = { src: block.src }
                   setIsEditingImage(true)
                 }}
                 onPointerDown={(e) => e.stopPropagation()}
@@ -336,14 +334,6 @@ export function BlockView({
                   onChange={(e) => (imageDraft.current.src = e.target.value)}
                 />
               </label>
-              <label>
-                Caption
-                <input
-                  type="text"
-                  defaultValue={block.caption ?? ''}
-                  onChange={(e) => (imageDraft.current.caption = e.target.value)}
-                />
-              </label>
               <button
                 onClick={(e) => {
                   e.stopPropagation()
@@ -352,7 +342,6 @@ export function BlockView({
                     return {
                       ...current,
                       src: imageDraft.current.src || current.src,
-                      caption: imageDraft.current.caption || undefined,
                     }
                   })
                   setImageError(false)
