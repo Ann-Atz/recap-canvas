@@ -560,6 +560,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  justify-content: space-between;
 }
 
 .summary-ref-pill {
@@ -575,6 +576,21 @@
 .summary-ref-title {
   font-weight: 700;
   color: #1f2328;
+}
+
+.summary-ref-copy {
+  background: #ffffff;
+  color: #1f2328;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 12px;
+  box-shadow: var(--shadow);
+}
+
+.summary-ref-copy:hover {
+  background: #f3f4f6;
 }
 
 .summary-ref-body {

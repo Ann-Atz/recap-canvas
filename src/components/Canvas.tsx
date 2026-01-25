@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useMemo } from 'react'
 import type React from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
-import type { Block, SummaryBlock } from '../models/canvas'
+import type { Block, SummaryBlock, SummarySpan } from '../models/canvas'
 import { createId, seedBlocks } from '../models/canvas'
 import { summarizeSelection } from '../ai/summarize'
 import { BlockView } from './BlockView'
@@ -32,6 +32,8 @@ type CanvasSummaryData = {
     | { id: string; role: 'user'; text: string; createdAt: number }
     | { id: string; role: 'assistant'; text: string; citations: { n: number; blockIds: string[] }[]; createdAt: number }
   >
+  citations?: { n: number; blockIds: string[] }[]
+  spans?: SummarySpan[]
 }
 
 const SUMMARY_PANEL_MIN_WIDTH = 280
@@ -72,6 +74,7 @@ export function Canvas() {
   const [pinnedHighlightIds, setPinnedHighlightIds] = useState<string[]>([])
   const [panelSummary, setPanelSummary] = useState<SummaryBlock | null>(null)
   const [canvasSummary, setCanvasSummary] = useState<CanvasSummaryData | null>(null)
+  const [panelOpen, setPanelOpen] = useState(false)
   const [panelWidth, setPanelWidth] = useState<number>(360)
   const panelResizeRef = useRef<{ startX: number; startWidth: number } | null>(null)
   const [qaQuestion, setQaQuestion] = useState<string>('')
@@ -183,6 +186,7 @@ export function Canvas() {
         setPinnedHighlightIds([])
         setHoverHighlightIds([])
         panelResizeRef.current = null
+        setPanelOpen(false)
       }
     }
     window.addEventListener('keydown', handleEscape)
@@ -298,13 +302,14 @@ export function Canvas() {
     return block.height ?? 120
   }
 
+  const selectedBlocks = getSelectedBlocks()
+  const hasSummaryRefSelected = selectedBlocks.some((b) => b.type === 'summary_ref')
   const selectionBounds = (() => {
-    const selected = getSelectedBlocks()
-    if (selected.length === 0) return null
-    const minX = Math.min(...selected.map((b) => b.x))
-    const maxX = Math.max(...selected.map((b) => b.x + b.width))
-    const minY = Math.min(...selected.map((b) => b.y))
-    const maxY = Math.max(...selected.map((b) => b.y + getBlockHeight(b)))
+    if (selectedBlocks.length === 0) return null
+    const minX = Math.min(...selectedBlocks.map((b) => b.x))
+    const maxX = Math.max(...selectedBlocks.map((b) => b.x + b.width))
+    const minY = Math.min(...selectedBlocks.map((b) => b.y))
+    const maxY = Math.max(...selectedBlocks.map((b) => b.y + getBlockHeight(b)))
     return { minX, maxX, minY, maxY }
   })()
 
@@ -484,64 +489,108 @@ export function Canvas() {
     window.removeEventListener('pointerup', handlePanelResizeEnd)
   }
 
-  const generateQaAnswer = (question: string, scopeIds: string[]): { answer: string; citations: { n: number; blockIds: string[] }[] } => {
-    const normQuestion = question.trim()
+  const generateQaAnswer = (
+    question: string,
+    scopeIds: string[],
+    summaryText: string,
+    spans: SummarySpan[] | undefined,
+    summaryCitations: { n: number; blockIds: string[] }[] | undefined
+  ): { answer: string; citations: { n: number; blockIds: string[] }[] } => {
+    const normQuestion = question.trim().toLowerCase()
     if (!normQuestion) return { answer: '', citations: [] }
-    const allowedBlocks = blocks.filter((b) => scopeIds.includes(b.id))
-    const words = normQuestion.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2)
-    const hasMatch = (text: string) => words.some((w) => text.toLowerCase().includes(w))
-    const bullets: { text: string; blockIds: string[] }[] = []
-
-    allowedBlocks.forEach((b) => {
-      if (b.type === 'text') {
-        if (hasMatch(b.text)) bullets.push({ text: b.text.replace(/\s+/g, ' ').slice(0, 220), blockIds: [b.id] })
-      }
-      if (b.type === 'link') {
-        const combined = `${b.label} ${b.url}`
-        if (hasMatch(combined)) bullets.push({ text: `Link: ${b.label} (${b.url})`, blockIds: [b.id] })
-      }
-      if (b.type === 'image') {
-        // No captions stored, so only cite presence if question mentions image/photo/etc.
-        if (hasMatch('image photo visual picture')) {
-          bullets.push({ text: 'Image present (no caption provided).', blockIds: [b.id] })
-        }
-      }
+    const scopeSet = new Set(scopeIds)
+    const citationMap = new Map<number, string[]>()
+    ;(summaryCitations ?? []).forEach((c) => {
+      citationMap.set(c.n, c.blockIds.filter((id) => scopeSet.has(id)))
     })
 
-    if (bullets.length === 0) {
-      const fallbackIds = scopeIds.slice(0, 2)
+    const lines = summaryText.split('\n')
+    let offset = 0
+    const lineEntries = lines.map((line) => {
+      const start = offset
+      const end = offset + line.length
+      offset += line.length + 1
+      const matchedSpans = (spans ?? []).filter((s) => !(s.end < start || s.start > end))
+      const citationNs = matchedSpans.flatMap((s) => s.citationNs)
+      const blockIds = citationNs.flatMap((n) => citationMap.get(n) ?? []).filter((id) => scopeSet.has(id))
+      return { line, citationNs, blockIds }
+    })
+
+    const pickByKeywords = (keywords: string[]) =>
+      lineEntries.filter((e) => keywords.some((k) => e.line.toLowerCase().includes(k)))
+
+    const answers: { text: string; blockIds: string[] }[] = []
+    const add = (text: string, blockIds: string[]) => {
+      const ids = blockIds.filter((id) => scopeSet.has(id))
+      answers.push({ text, blockIds: ids.length ? ids : scopeIds.slice(0, 1) })
+    }
+
+    if (/what.*about|core idea|orientation|one sentence/i.test(normQuestion)) {
+      const about = pickByKeywords(['what this seems to be about'])
+      const picked = about.length ? about.slice(0, 2) : lineEntries.slice(0, 2)
+      picked.forEach((e) => add(e.line, e.blockIds))
+    } else if (/decision|decisions|postponed|avoided|care/i.test(normQuestion)) {
+      const dec = pickByKeywords(['decision', 'tension'])
+      if (dec.length) dec.slice(0, 4).forEach((e) => add(e.line, e.blockIds))
+      else add('Not enough decision signals in this scope.', scopeIds.slice(0, 2))
+    } else if (/constraint|assumption|conflict/i.test(normQuestion)) {
+      const cons = pickByKeywords(['constraint', 'assumption'])
+      if (cons.length) cons.slice(0, 4).forEach((e) => add(e.line, e.blockIds))
+      else add('No explicit constraints found in this scope.', scopeIds.slice(0, 2))
+    } else if (/where.*start|which block|minimum.*read/i.test(normQuestion)) {
+      const refs = pickByKeywords(['best blocks', 'read next'])
+      const chosen = refs.length ? refs : lineEntries.slice(0, 3)
+      chosen.slice(0, 3).forEach((e) => add(e.line, e.blockIds))
+    } else if (/missing|underspecified|gap|conflict/i.test(normQuestion)) {
+      const gaps = pickByKeywords(['open questions', 'gaps', 'underspecified', 'fragile', 'risky'])
+      if (gaps.length) gaps.slice(0, 3).forEach((e) => add(e.line, e.blockIds))
+      else add('Gaps are not clearly stated in this scope.', scopeIds.slice(0, 2))
+    } else if (/shorten|condense/i.test(normQuestion)) {
+      const concise = lineEntries.filter((e) => e.line.startsWith('•')).slice(0, 3)
+      concise.forEach((e) => add(e.line.replace(/^•\s*/, ''), e.blockIds))
+    } else if (/expand|rephrase|checklist/i.test(normQuestion)) {
+      const base = lineEntries.filter((e) => e.line.startsWith('•')).slice(0, 4)
+      base.forEach((e) => add(e.line.replace(/^•\s*/, ''), e.blockIds))
+    } else {
+      add('I can help with summarizing, extracting, refocusing, navigating, or identifying gaps in this file.', scopeIds.slice(0, 1))
+    }
+
+    if (!answers.length) {
       return {
-        answer: '• Not enough information in the current scope to answer.',
-        citations: [{ n: 1, blockIds: fallbackIds }],
+        answer: 'Not enough information in the current scope to answer.',
+        citations: [{ n: 1, blockIds: scopeIds.slice(0, 2) }],
       }
     }
 
-    const citationMap = new Map<string, number>()
-    let counter = 1
-    const ensureCitation = (ids: string[]) => {
+    const citationNumberMap = new Map<string, number>()
+    let num = 1
+    const ensureNum = (ids: string[]) => {
       const key = Array.from(new Set(ids)).sort().join('|')
-      const existing = citationMap.get(key)
+      const existing = citationNumberMap.get(key)
       if (existing) return existing
-      citationMap.set(key, counter)
-      counter += 1
-      return citationMap.get(key) as number
+      citationNumberMap.set(key, num)
+      num += 1
+      return citationNumberMap.get(key) as number
     }
 
-    const lines: string[] = []
-    bullets.slice(0, 4).forEach((b) => {
-      const n = ensureCitation(b.blockIds.filter((id) => scopeIds.includes(id)))
-      lines.push(`• ${b.text} [${n}]`)
+    const linesOut = answers.map((a) => {
+      const n = ensureNum(a.blockIds)
+      return `• ${a.text} [${n}]`
     })
 
-    const citations = Array.from(citationMap.entries()).map(([key, n]) => ({
+    const citations = Array.from(citationNumberMap.entries()).map(([key, n]) => ({
       n,
-      blockIds: key.split('|'),
+      blockIds: key ? key.split('|') : [],
     }))
 
-    return { answer: lines.join('\n'), citations }
+    return { answer: linesOut.join('\n'), citations }
   }
 
   const handleCanvasPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.target === event.currentTarget) {
+      setPinnedHighlightIds([])
+      setHoverHighlightIds([])
+    }
     if (event.target !== event.currentTarget) return
     if (event.button !== 0 && event.pointerType !== 'touch') return
 
@@ -752,7 +801,7 @@ export function Canvas() {
 
   const handleSummarize = () => {
     const selected = getSelectedBlocks()
-    if (selected.length < 1 || !selectionBounds) return
+    if (selected.length < 1 || !selectionBounds || hasSummaryRefSelected) return
     const content = summarizeSelection(selected)
     const summarySize = { width: 360, height: 260 }
     const newSummary: SummaryBlock = {
@@ -778,6 +827,7 @@ export function Canvas() {
     setCanvasSummary(null)
     setQaQuestion('')
     persistSelectionSummary(newSummary)
+    setPanelOpen(true)
   }
 
   useEffect(() => {
@@ -835,6 +885,7 @@ export function Canvas() {
               setCanvasSummary(summary)
               setQaQuestion('')
               persistCanvasSummary(summary)
+              setPanelOpen(true)
             }}
           >
             Summarize canvas
@@ -871,7 +922,7 @@ export function Canvas() {
         onPointerCancel={handleCanvasPointerEnd}
         onWheel={handleWheelZoom}
       >
-        {selectionBounds && selectedIds.length >= 1 && (
+        {selectionBounds && selectedIds.length >= 1 && !hasSummaryRefSelected && (
           <button
             className="summarize-action"
             style={{
@@ -901,10 +952,20 @@ export function Canvas() {
             onDelete={(id) => deleteBlocks([id])}
             onSelect={(clickedBlock, mode) => {
               if (clickedBlock.type === 'summary_ref') {
-                setPinnedHighlightIds([clickedBlock.id, ...clickedBlock.scopeBlockIds])
-                setHoverHighlightIds([])
-                setSelectedIds([clickedBlock.id])
-                panToBlocks(clickedBlock.scopeBlockIds)
+                const targetIds = [clickedBlock.id, ...clickedBlock.scopeBlockIds]
+                const isSamePinned =
+                  pinnedHighlightIds.length === targetIds.length &&
+                  targetIds.every((id) => pinnedHighlightIds.includes(id))
+                if (isSamePinned) {
+                  setPinnedHighlightIds([])
+                  setHoverHighlightIds([])
+                  setSelectedIds([])
+                } else {
+                  setPinnedHighlightIds(targetIds)
+                  setHoverHighlightIds([])
+                  setSelectedIds([clickedBlock.id])
+                  panToBlocks(clickedBlock.scopeBlockIds)
+                }
                 return
               }
               if (mode === 'single') {
@@ -935,7 +996,7 @@ export function Canvas() {
           )
         })()}
       </div>
-      {(panelSummary || canvasSummary) && (
+      {panelOpen && (panelSummary || canvasSummary) && (
         <aside className="summary-panel" style={{ width: `${panelWidth}px` }}>
           <div
             className="summary-panel-resize"
@@ -957,17 +1018,18 @@ export function Canvas() {
               >
                 Add block
               </button>
-            <button
-              className="summary-panel-close"
-              onClick={() => {
-                setPanelSummary(null)
-                setCanvasSummary(null)
-                setQaQuestion('')
-                persistSelectionSummary(null)
-              }}
-            >
-              Close
-            </button>
+              <button
+                className="summary-panel-close"
+                onClick={() => {
+                  setPanelSummary(null)
+                  setCanvasSummary(null)
+                  setQaQuestion('')
+                  persistSelectionSummary(null)
+                  setPanelOpen(false)
+                }}
+              >
+                Close
+              </button>
             </div>
           </div>
           <div className="summary-scroll">
@@ -1066,10 +1128,16 @@ export function Canvas() {
                       setCanvasSummary(updated)
                       persistCanvasSummary(updated)
                     }
-                    const targetScope =
-                      panelSummary?.scope ??
-                      canvasSummary?.scope ?? { kind: 'canvas', blockIds: blocks.filter((b) => b.type !== 'summary').map((b) => b.id) }
-                    const { answer, citations } = generateQaAnswer(qaQuestion, targetScope.blockIds)
+                    const targetSummary = panelSummary ?? canvasSummary
+                    if (!targetSummary) return
+                    const targetScope = targetSummary.scope
+                    const { answer, citations } = generateQaAnswer(
+                      qaQuestion,
+                      targetScope.blockIds,
+                      targetSummary.summaryText,
+                      targetSummary.spans,
+                      targetSummary.citations
+                    )
                     if (!answer) return
                     setQaQuestion('')
                     const assistantMessage = {

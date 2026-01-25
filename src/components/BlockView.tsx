@@ -596,6 +596,17 @@ export function BlockView({
           <div className="summary-ref-header">
             <span className="summary-ref-pill">SUMMARY</span>
             <span className="summary-ref-title">{block.title}</span>
+            <button
+              className="summary-ref-copy"
+              onClick={(e) => {
+                e.stopPropagation()
+                const text = block.summaryText ?? block.preview ?? ''
+                navigator.clipboard?.writeText(text).catch(() => undefined)
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+              Copy
+            </button>
           </div>
           <div className="summary-ref-body" ref={summaryRefBodyRef}>
             {(block.summaryText ?? block.preview ?? '').split('\n').map((line: string, idx: number) => (
