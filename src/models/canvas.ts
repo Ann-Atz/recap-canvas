@@ -54,9 +54,38 @@ export type SummaryBlock = BlockBase & {
   summaryText: string
   citations: Citation[]
   spans: SummarySpan[]
+  scope: { kind: 'selection' | 'canvas'; blockIds: string[] }
+  qa: Array<{
+    id: string
+    question: string
+    answer: string
+    citations: Citation[]
+    createdAt: number
+  }>
+  messages?: Array<
+    | { id: string; role: 'user'; text: string; createdAt: number }
+    | { id: string; role: 'assistant'; text: string; citations: Citation[]; createdAt: number }
+  >
 }
 
-export type Block = TextBlock | ImageBlock | LinkBlock | SummaryBlock
+export type SummaryRefBlock = {
+  id: string
+  type: 'summary_ref'
+  x: number
+  y: number
+  width: number
+  height: number
+  summaryId: string
+  title: string
+  preview: string
+  summaryText?: string
+  scopeBlockIds: string[]
+  pastelColor: string
+  createdAt: number
+  updatedAt?: string
+}
+
+export type Block = TextBlock | ImageBlock | LinkBlock | SummaryBlock | SummaryRefBlock
 
 export function createId(prefix = 'BLK'): string {
   const rand = Math.random().toString(16).slice(2, 6)

@@ -94,7 +94,7 @@
 }
 
 .block.block-summary {
-  background: #f6f8ff;
+  background: #fff68e;
   border-color: #e4e8f5;
 }
 
@@ -476,6 +476,22 @@
   background: rgba(11, 95, 255, 0.12);
 }
 
+.citation-chip.inline {
+  min-width: unset;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: transparent;
+  border-color: rgba(11, 95, 255, 0.3);
+  box-shadow: none;
+  text-decoration: none;
+}
+
+.citation-chip.inline:hover {
+  background: rgba(11, 95, 255, 0.08);
+  box-shadow: none;
+}
+
 .summary-sources {
   margin-top: 10px;
   padding-top: 8px;
@@ -523,6 +539,66 @@
   font-size: 13px;
 }
 
+.block-summary_ref {
+  background: #fffada;
+  border: 1px solid #e8dea5;
+  box-shadow: var(--shadow);
+}
+
+.block-summary_ref.highlight {
+  box-shadow: 0 0 0 2px rgba(11, 95, 255, 0.4), var(--shadow-strong);
+}
+
+.summary-ref-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100%;
+}
+
+.summary-ref-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.summary-ref-pill {
+  background: rgba(0, 0, 0, 0.08);
+  color: #1f2328;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.summary-ref-title {
+  font-weight: 700;
+  color: #1f2328;
+}
+
+.summary-ref-body {
+  margin: 0;
+  color: #1f2328;
+  font-size: 14px;
+  line-height: 1.5;
+  overflow-y: auto;
+  padding-right: 4px;
+  word-break: break-word;
+  flex: 1;
+}
+
+.summary-ref-line {
+  margin: 0 0 6px;
+  word-break: break-word;
+}
+
+.summary-ref-hint {
+  margin: 0;
+  color: #6b7280;
+  font-size: 12px;
+}
+
 .summary-panel {
   position: fixed;
   top: 16px;
@@ -543,6 +619,14 @@
   max-width: 720px;
   box-sizing: border-box;
   position: fixed;
+}
+
+.summary-scroll {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .summary-panel-header {
@@ -569,11 +653,31 @@
   background: #e5e7eb;
 }
 
+.summary-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.summary-add-btn {
+  background: var(--primary);
+  color: #ffffff;
+  border: 1px solid rgba(11, 95, 255, 0.7);
+  border-radius: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.summary-add-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .summary-panel-body {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  overflow: auto;
 }
 
 .summary-panel-resize {
@@ -584,6 +688,101 @@
   width: 10px;
   cursor: ew-resize;
   z-index: 9;
+}
+
+.summary-qa {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  position: sticky;
+  bottom: 0;
+  background: #ffffff;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.summary-qa-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.summary-qa-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 90%;
+}
+
+.summary-qa-item.user {
+  align-self: flex-end;
+  background: #e8f0ff;
+  border: 1px solid rgba(11, 95, 255, 0.35);
+  border-radius: 12px;
+  padding: 8px 12px;
+}
+
+.summary-qa-item.assistant {
+  align-self: flex-start;
+  background: #f7f8fb;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 8px 12px;
+}
+
+.summary-qa-label {
+  margin: 0 0 2px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.summary-qa-question {
+  margin: 0;
+  font-weight: 600;
+  color: #1f2328;
+}
+
+.summary-qa-answer {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.summary-qa-input {
+  display: flex;
+  gap: 8px;
+}
+
+.summary-qa-input input {
+  flex: 1;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.summary-qa-input button {
+  background: var(--primary);
+  color: #ffffff;
+  border: 1px solid rgba(11, 95, 255, 0.7);
+  border-radius: 10px;
+  padding: 8px 12px;
+  cursor: pointer;
+  box-shadow: 0 10px 20px rgba(11, 95, 255, 0.22);
+  font-weight: 600;
+}
+
+.summary-chat-divider {
+  margin: 6px 0;
+  border: none;
+  border-top: 1px solid var(--border);
+}
+
+.summary-chat-divider.labeled {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-top: 1px solid var(--border);
+  padding-top: 4px;
 }
 
 .selection-rect {

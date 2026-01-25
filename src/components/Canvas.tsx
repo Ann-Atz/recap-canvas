@@ -14,14 +14,31 @@ const MAX_ZOOM = 1.4
 type Tool = 'select' | 'text' | 'image' | 'link'
 
 type CanvasSummaryData = {
+  id: string
   title: string
   totalBlocks: number
   sections: Record<string, string>
   evidence: string[]
+  summaryText: string
+  scope: { kind: 'canvas'; blockIds: string[] }
+  qa: Array<{
+    id: string
+    question: string
+    answer: string
+    citations: { n: number; blockIds: string[] }[]
+    createdAt: number
+  }>
+  messages: Array<
+    | { id: string; role: 'user'; text: string; createdAt: number }
+    | { id: string; role: 'assistant'; text: string; citations: { n: number; blockIds: string[] }[]; createdAt: number }
+  >
 }
 
 const SUMMARY_PANEL_MIN_WIDTH = 280
 const SUMMARY_PANEL_MAX_WIDTH = 720
+const PANEL_CANVAS_KEY = 'recap-canvas:panel-canvas-summary'
+const PANEL_SELECTION_KEY = 'recap-canvas:panel-selection-summary'
+const PASTEL_COLORS = ['#f6d9d5', '#ffe8b3', '#dff5c8', '#cde8ff', '#e6d8ff', '#f8d9ef', '#d8f0f4', '#f2e6d8']
 
 export function Canvas() {
   const initialBlocksRef = useRef<Block[] | null>(null)
@@ -29,7 +46,20 @@ export function Canvas() {
   if (initialBlocksRef.current === null) initialBlocksRef.current = loadState()
   if (initialZoomRef.current === null) initialZoomRef.current = loadZoom()
 
-  const [blocks, setBlocks] = useState<Block[]>(() => initialBlocksRef.current ?? seedBlocks)
+  const [blocks, setBlocks] = useState<Block[]>(() => {
+    const base = initialBlocksRef.current ?? seedBlocks
+    return base
+      .filter((b) => b.type !== 'summary' || b.summaryText) // keep summaries only if they have content
+      .map((b) => {
+        if (b.type !== 'summary') return b
+        return {
+          ...b,
+          scope: b.scope ?? { kind: 'selection', blockIds: b.evidenceBlockIds ?? [] },
+          qa: b.qa ?? [],
+          messages: b.messages ?? [],
+        }
+      })
+  })
   const [activeTool, setActiveTool] = useState<Tool>('select')
   const [zoom, setZoom] = useState<number>(() => {
     const stored = initialZoomRef.current
@@ -44,6 +74,65 @@ export function Canvas() {
   const [canvasSummary, setCanvasSummary] = useState<CanvasSummaryData | null>(null)
   const [panelWidth, setPanelWidth] = useState<number>(360)
   const panelResizeRef = useRef<{ startX: number; startWidth: number } | null>(null)
+  const [qaQuestion, setQaQuestion] = useState<string>('')
+  const chatBottomRef = useRef<HTMLDivElement | null>(null)
+  const activeSummary = panelSummary ?? canvasSummary
+  const activeMessages = activeSummary?.messages ?? []
+
+  const CitationChip = ({
+    citation,
+    mode = 'chip',
+  }: {
+    citation: { n: number; blockIds: string[] }
+    mode?: 'chip' | 'inline'
+  }) => {
+    const className = mode === 'chip' ? 'citation-chip' : 'citation-chip inline'
+    return (
+      <button
+        type="button"
+        className={className}
+        onMouseEnter={() => handleCitationHover(citation.blockIds)}
+        onMouseLeave={handleCitationLeave}
+        onClick={(e) => {
+          e.stopPropagation()
+          handleCitationClick(citation.blockIds)
+        }}
+        onPointerDown={(e) => e.stopPropagation()}
+        aria-label={`View sources for citation ${citation.n}`}
+      >
+        {citation.n}
+      </button>
+    )
+  }
+
+  const renderTextWithCitations = (
+    text: string,
+    citations: { n: number; blockIds: string[] }[]
+  ) => {
+    const parts: React.ReactNode[] = []
+    const regex = /\[(\d+)\]/g
+    let lastIndex = 0
+    let match
+    const citationMap = new Map(citations.map((c) => [String(c.n), c]))
+    while ((match = regex.exec(text)) !== null) {
+      const [token, num] = match
+      const start = match.index
+      if (start > lastIndex) {
+        parts.push(text.slice(lastIndex, start))
+      }
+      const citation = citationMap.get(num)
+      if (citation) {
+        parts.push(<CitationChip key={`c-${num}-${start}`} citation={citation} mode="inline" />)
+      } else {
+        parts.push(token)
+      }
+      lastIndex = start + token.length
+    }
+    if (lastIndex < text.length) {
+      parts.push(text.slice(lastIndex))
+    }
+    return parts
+  }
   const [selection, setSelection] = useState<{
     active: boolean
     pointerId: number | null
@@ -99,6 +188,42 @@ export function Canvas() {
     window.addEventListener('keydown', handleEscape)
     return () => window.removeEventListener('keydown', handleEscape)
   }, [])
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(PANEL_CANVAS_KEY)
+      if (raw) {
+        const parsed = JSON.parse(raw) as CanvasSummaryData
+        if (parsed && parsed.scope) {
+          const summaryText =
+            (parsed as any).summaryText ??
+            Object.entries(parsed.sections || {}).map(([label, value]) => `• ${label}: ${value}`).join('\n')
+          setCanvasSummary({ ...parsed, summaryText })
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to load canvas summary', err)
+    }
+  }, [])
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(PANEL_SELECTION_KEY)
+      if (raw) {
+        const parsed = JSON.parse(raw) as SummaryBlock
+        if (parsed && parsed.scope && parsed.summaryText) {
+          setPanelSummary(parsed)
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to load selection summary', err)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!chatBottomRef.current) return
+    chatBottomRef.current.scrollIntoView({ behavior: 'smooth' })
+  }, [panelSummary?.messages, canvasSummary?.messages])
 
   const addTextBlock = (position: { x: number; y: number }) => {
     const now = new Date().toISOString()
@@ -172,6 +297,7 @@ export function Canvas() {
     }
     return block.height ?? 120
   }
+
   const selectionBounds = (() => {
     const selected = getSelectedBlocks()
     if (selected.length === 0) return null
@@ -209,11 +335,24 @@ export function Canvas() {
     })
   }
 
+  const pickPastelColor = (summaryId: string) => {
+    const existing = blocks.filter((b): b is Extract<Block, { type: 'summary_ref' }> => b.type === 'summary_ref')
+    const used = new Set(existing.map((b) => b.pastelColor))
+    const unused = PASTEL_COLORS.find((c) => !used.has(c))
+    if (unused) return unused
+    let hash = 0
+    for (const ch of summaryId) {
+      hash = (hash * 31 + ch.charCodeAt(0)) % 100000
+    }
+    return PASTEL_COLORS[hash % PASTEL_COLORS.length]
+  }
+
   const generateCanvasSummary = (allBlocks: Block[]): CanvasSummaryData => {
     const baseBlocks = allBlocks.filter((b) => b.type !== 'summary')
     const totalBlocks = baseBlocks.length
     if (totalBlocks === 0) {
       return {
+        id: 'CANVAS-SUMMARY',
         title: 'Canvas summary',
         totalBlocks: 0,
         sections: {
@@ -223,9 +362,12 @@ export function Canvas() {
           'Constraints or boundaries shaping the work': 'No blocks on canvas.',
           'Open questions or unresolved tensions': 'No blocks on canvas.',
           'What’s missing or unclear': 'Everything—canvas is empty.',
-          Evidence: '',
         },
         evidence: [],
+        summaryText: '• No blocks on canvas.',
+        scope: { kind: 'canvas', blockIds: [] },
+        qa: [],
+        messages: [],
       }
     }
 
@@ -267,14 +409,22 @@ export function Canvas() {
       'Constraints or boundaries shaping the work': constraints.length ? constraints.join(' ') : 'Constraints are weakly stated; call out must-haves explicitly.',
       'Open questions or unresolved tensions': questions.length ? questions.join(' ') : 'Questions are implicit; make uncertainties explicit.',
       'What’s missing or unclear': 'Success criteria, explicit user outcomes, and facilitation/flow details are not evident.',
-      Evidence: evidence.join('\n'),
     }
 
+    const summaryText = Object.entries(sections)
+      .map(([label, value]) => `• ${label}: ${value}`)
+      .join('\n')
+
     return {
+      id: 'CANVAS-SUMMARY',
       title: 'Canvas summary',
       totalBlocks,
       sections,
       evidence,
+      summaryText,
+      scope: { kind: 'canvas', blockIds: baseBlocks.map((b) => b.id) },
+      qa: [],
+      messages: [],
     }
   }
 
@@ -299,6 +449,18 @@ export function Canvas() {
     setHoverHighlightIds([])
   }
 
+  const persistCanvasSummary = (summary: CanvasSummaryData | null) => {
+    if (!summary) {
+      window.localStorage.removeItem(PANEL_CANVAS_KEY)
+      return
+    }
+    try {
+      window.localStorage.setItem(PANEL_CANVAS_KEY, JSON.stringify(summary))
+    } catch (err) {
+      console.warn('Failed to persist canvas summary', err)
+    }
+  }
+
   const handlePanelResizeStart = (event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault()
     panelResizeRef.current = { startX: event.clientX, startWidth: panelWidth }
@@ -320,6 +482,63 @@ export function Canvas() {
     panelResizeRef.current = null
     window.removeEventListener('pointermove', handlePanelResizeMove)
     window.removeEventListener('pointerup', handlePanelResizeEnd)
+  }
+
+  const generateQaAnswer = (question: string, scopeIds: string[]): { answer: string; citations: { n: number; blockIds: string[] }[] } => {
+    const normQuestion = question.trim()
+    if (!normQuestion) return { answer: '', citations: [] }
+    const allowedBlocks = blocks.filter((b) => scopeIds.includes(b.id))
+    const words = normQuestion.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2)
+    const hasMatch = (text: string) => words.some((w) => text.toLowerCase().includes(w))
+    const bullets: { text: string; blockIds: string[] }[] = []
+
+    allowedBlocks.forEach((b) => {
+      if (b.type === 'text') {
+        if (hasMatch(b.text)) bullets.push({ text: b.text.replace(/\s+/g, ' ').slice(0, 220), blockIds: [b.id] })
+      }
+      if (b.type === 'link') {
+        const combined = `${b.label} ${b.url}`
+        if (hasMatch(combined)) bullets.push({ text: `Link: ${b.label} (${b.url})`, blockIds: [b.id] })
+      }
+      if (b.type === 'image') {
+        // No captions stored, so only cite presence if question mentions image/photo/etc.
+        if (hasMatch('image photo visual picture')) {
+          bullets.push({ text: 'Image present (no caption provided).', blockIds: [b.id] })
+        }
+      }
+    })
+
+    if (bullets.length === 0) {
+      const fallbackIds = scopeIds.slice(0, 2)
+      return {
+        answer: '• Not enough information in the current scope to answer.',
+        citations: [{ n: 1, blockIds: fallbackIds }],
+      }
+    }
+
+    const citationMap = new Map<string, number>()
+    let counter = 1
+    const ensureCitation = (ids: string[]) => {
+      const key = Array.from(new Set(ids)).sort().join('|')
+      const existing = citationMap.get(key)
+      if (existing) return existing
+      citationMap.set(key, counter)
+      counter += 1
+      return citationMap.get(key) as number
+    }
+
+    const lines: string[] = []
+    bullets.slice(0, 4).forEach((b) => {
+      const n = ensureCitation(b.blockIds.filter((id) => scopeIds.includes(id)))
+      lines.push(`• ${b.text} [${n}]`)
+    })
+
+    const citations = Array.from(citationMap.entries()).map(([key, n]) => ({
+      n,
+      blockIds: key.split('|'),
+    }))
+
+    return { answer: lines.join('\n'), citations }
   }
 
   const handleCanvasPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -385,27 +604,6 @@ export function Canvas() {
     const clampedX = Math.max(0, Math.min(x, CANVAS_WIDTH - width))
     const clampedY = Math.max(0, Math.min(y, CANVAS_HEIGHT - height))
     return { x: clampedX, y: clampedY }
-  }
-
-  const computeSummaryPosition = (summarySize: { width: number; height: number }) => {
-    if (!selectionBounds) return { x: 0, y: 0 }
-    const { width, height } = summarySize
-    const scrollEl = scrollRef.current
-    const visibleRight = scrollEl ? scrollEl.scrollLeft + scrollEl.clientWidth : CANVAS_WIDTH
-    const visibleBottom = scrollEl ? scrollEl.scrollTop + scrollEl.clientHeight : CANVAS_HEIGHT
-
-    const rightPlacement = { x: selectionBounds.maxX + 40, y: selectionBounds.minY }
-    const belowPlacement = { x: selectionBounds.minX, y: selectionBounds.maxY + 40 }
-
-    let chosen = rightPlacement
-    if (rightPlacement.x + width > visibleRight) {
-      chosen = belowPlacement
-    }
-    if (chosen.y + height > visibleBottom && rightPlacement.x + width <= visibleRight) {
-      chosen = rightPlacement
-    }
-
-    return clampPosition(chosen.x, chosen.y, width, height)
   }
 
   const handleToolSelect = (tool: Tool) => {
@@ -490,6 +688,18 @@ export function Canvas() {
     })
   }
 
+  const persistSelectionSummary = (summary: SummaryBlock | null) => {
+    if (!summary) {
+      window.localStorage.removeItem(PANEL_SELECTION_KEY)
+      return
+    }
+    try {
+      window.localStorage.setItem(PANEL_SELECTION_KEY, JSON.stringify(summary))
+    } catch (err) {
+      console.warn('Failed to persist selection summary', err)
+    }
+  }
+
   const panToBlocks = (ids: string[]) => {
     if (!ids.length) return
     const targetBlocks = blocks.filter((b) => ids.includes(b.id))
@@ -506,12 +716,45 @@ export function Canvas() {
     })
   }
 
+  const addSummaryRefBlock = () => {
+    const summary = panelSummary ?? canvasSummary
+    if (!summary) return
+    const scrollEl = scrollRef.current
+    const viewCenter = scrollEl
+      ? {
+          x: scrollEl.scrollLeft / zoom + scrollEl.clientWidth / (2 * zoom),
+          y: scrollEl.scrollTop / zoom + scrollEl.clientHeight / (2 * zoom),
+        }
+      : { x: CANVAS_WIDTH / 2, y: CANVAS_HEIGHT / 2 }
+    const width = 360
+    const height = 180
+    const previewLines = summary.summaryText
+      ? summary.summaryText.split('\n').filter((l) => l.trim().startsWith('•'))
+      : []
+    const previewText = previewLines.slice(0, 2).join('\n') || summary.summaryText.slice(0, 180)
+    const pastelColor = pickPastelColor(summary.id)
+    const block: Block = {
+      id: createId('SREF'),
+      type: 'summary_ref',
+      x: Math.max(0, Math.min(viewCenter.x - width / 2, CANVAS_WIDTH - width)),
+      y: Math.max(0, Math.min(viewCenter.y - height / 2, CANVAS_HEIGHT - height)),
+      width,
+      height,
+      summaryId: summary.id,
+      title: summary.title,
+      preview: previewText,
+      scopeBlockIds: summary.scope.blockIds,
+      pastelColor,
+      createdAt: Date.now(),
+    }
+    setBlocks((prev) => [...prev, block])
+  }
+
   const handleSummarize = () => {
     const selected = getSelectedBlocks()
     if (selected.length < 1 || !selectionBounds) return
     const content = summarizeSelection(selected)
     const summarySize = { width: 360, height: 260 }
-    const position = computeSummaryPosition(summarySize)
     const newSummary: SummaryBlock = {
       id: createId('SUM'),
       type: 'summary',
@@ -521,30 +764,20 @@ export function Canvas() {
       summaryText: content.summaryText,
       citations: content.citations,
       spans: content.spans,
-      x: position.x,
-      y: position.y,
+      scope: { kind: 'selection', blockIds: selected.map((b) => b.id) },
+      qa: [],
+      messages: [],
+      x: 0,
+      y: 0,
       width: summarySize.width,
       height: summarySize.height,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     }
-    setBlocks((prev) => [...prev, newSummary])
     setPanelSummary(newSummary)
-
-    const selectionRect = selectionBounds
-    const summaryRect = {
-      x: position.x,
-      y: position.y,
-      width: summarySize.width,
-      height: summarySize.height,
-    }
-    const targetRect = {
-      x: Math.min(selectionRect.minX, summaryRect.x),
-      y: Math.min(selectionRect.minY, summaryRect.y),
-      width: Math.max(selectionRect.maxX, summaryRect.x + summaryRect.width) - Math.min(selectionRect.minX, summaryRect.x),
-      height: Math.max(selectionRect.maxY, summaryRect.y + summaryRect.height) - Math.min(selectionRect.minY, summaryRect.y),
-    }
-    ensureRectInView(targetRect)
+    setCanvasSummary(null)
+    setQaQuestion('')
+    persistSelectionSummary(newSummary)
   }
 
   useEffect(() => {
@@ -600,6 +833,8 @@ export function Canvas() {
               setPanelSummary(null)
               const summary = generateCanvasSummary(blocks)
               setCanvasSummary(summary)
+              setQaQuestion('')
+              persistCanvasSummary(summary)
             }}
           >
             Summarize canvas
@@ -664,12 +899,19 @@ export function Canvas() {
             onPositionChange={handlePositionChange}
             onUpdate={handleUpdateBlock}
             onDelete={(id) => deleteBlocks([id])}
-            onSelect={(id, mode) => {
+            onSelect={(clickedBlock, mode) => {
+              if (clickedBlock.type === 'summary_ref') {
+                setPinnedHighlightIds([clickedBlock.id, ...clickedBlock.scopeBlockIds])
+                setHoverHighlightIds([])
+                setSelectedIds([clickedBlock.id])
+                panToBlocks(clickedBlock.scopeBlockIds)
+                return
+              }
               if (mode === 'single') {
-                setSelectedIds([id])
+                setSelectedIds([clickedBlock.id])
               } else {
                 setSelectedIds((prev) =>
-                  prev.includes(id) ? prev.filter((existing) => existing !== id) : [...prev, id]
+                  prev.includes(clickedBlock.id) ? prev.filter((existing) => existing !== clickedBlock.id) : [...prev, clickedBlock.id]
                 )
               }
             }}
@@ -707,66 +949,157 @@ export function Canvas() {
               <h3>{panelSummary ? panelSummary.title : 'Canvas summary'}</h3>
               {canvasSummary && <p className="summary-subtitle">Summary of {canvasSummary.totalBlocks} blocks</p>}
             </div>
+            <div className="summary-panel-actions">
+              <button
+                className="summary-add-btn"
+                disabled={!activeSummary}
+                onClick={() => addSummaryRefBlock()}
+              >
+                Add block
+              </button>
             <button
               className="summary-panel-close"
               onClick={() => {
                 setPanelSummary(null)
                 setCanvasSummary(null)
+                setQaQuestion('')
+                persistSelectionSummary(null)
               }}
             >
               Close
             </button>
+            </div>
           </div>
-          {panelSummary && (
-            <div className="summary-panel-body">
-              {(panelSummary.summaryText || '').split('\n').map((line, idx) => (
-                <p className="summary-text" key={idx}>
-                  {line}
-                </p>
-              ))}
-              {panelSummary.citations?.length > 0 && (
-                <div className="summary-sources">
-                  <div className="summary-sources-header">
-                    <span className="summary-label">Sources</span>
+          <div className="summary-scroll">
+            {panelSummary && (
+              <div className="summary-panel-body">
+                {(panelSummary.summaryText || '').split('\n').map((line, idx) => (
+                  <p className="summary-text" key={idx}>
+                    {line}
+                  </p>
+                ))}
+              </div>
+            )}
+            {canvasSummary && (
+              <div className="summary-panel-body">
+                {Object.entries(canvasSummary.sections).map(([heading, value]) => (
+                  <div className="summary-section" key={heading}>
+                    <p className="summary-label">{heading}</p>
+                    <p className="summary-text">{value}</p>
                   </div>
-                  <div className="summary-sources-list">
-                    {panelSummary.citations.map((c) => (
-                      <div className="summary-source-row" key={c.n}>
-                        <span className="summary-source-n">{c.n}</span>
-                        <span className="summary-source-label">
-                          {c.blockIds.map((id) => `block:${id}`).join(', ')}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
+                ))}
+              </div>
+            )}
+            {activeSummary && (
+              <>
+                <div className="summary-chat-divider labeled">
+                  <span className="summary-label">
+                    Ask about this {activeSummary.scope.kind === 'selection' ? 'selection' : 'canvas'}
+                  </span>
                 </div>
-              )}
+                <div className="summary-qa-list">
+                  {activeMessages.map((msg) => (
+                    <div
+                      key={msg.id}
+                      className={`summary-qa-item ${msg.role === 'user' ? 'user' : 'assistant'}`}
+                    >
+                      <p className="summary-qa-label">{msg.role === 'user' ? 'You' : 'Recap'}</p>
+                      <p className="summary-qa-answer">
+                        {msg.role === 'assistant'
+                          ? renderTextWithCitations(
+                              msg.text,
+                              'citations' in msg ? msg.citations : []
+                            )
+                          : msg.text}
+                      </p>
+                      {'citations' in msg && msg.citations?.length > 0 && (
+                        <div className="summary-citations">
+                          {msg.citations.map((c) => (
+                            <CitationChip key={c.n} citation={c} />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  <div ref={chatBottomRef} />
+                </div>
+              </>
+            )}
+          </div>
+          {(panelSummary || canvasSummary) && (
+            <div className="summary-qa">
+              <div className="summary-qa-input">
+                <input
+                  type="text"
+                  placeholder={
+                    panelSummary
+                      ? `Ask about these ${panelSummary.scope.blockIds.length} blocks...`
+                      : 'Ask about the canvas...'
+                  }
+                  value={qaQuestion}
+                  onChange={(e) => setQaQuestion(e.target.value)}
+                />
+                <button
+                  onClick={() => {
+                    if (!qaQuestion.trim()) return
+                    const userMessage = {
+                      id: createId('MSG'),
+                      role: 'user' as const,
+                      text: qaQuestion.trim(),
+                      createdAt: Date.now(),
+                    }
+                    const thinkingMessage = {
+                      id: createId('MSG'),
+                      role: 'assistant' as const,
+                      text: 'Thinking…',
+                      citations: [] as { n: number; blockIds: string[] }[],
+                      createdAt: Date.now(),
+                    }
+                    if (panelSummary) {
+                      const messages = [...(panelSummary.messages ?? []), userMessage, thinkingMessage]
+                      const updated = { ...panelSummary, messages }
+                      setPanelSummary(updated)
+                      persistSelectionSummary(updated)
+                    } else if (canvasSummary) {
+                      const messages = [...(canvasSummary.messages ?? []), userMessage, thinkingMessage]
+                      const updated = { ...canvasSummary, messages }
+                      setCanvasSummary(updated)
+                      persistCanvasSummary(updated)
+                    }
+                    const targetScope =
+                      panelSummary?.scope ??
+                      canvasSummary?.scope ?? { kind: 'canvas', blockIds: blocks.filter((b) => b.type !== 'summary').map((b) => b.id) }
+                    const { answer, citations } = generateQaAnswer(qaQuestion, targetScope.blockIds)
+                    if (!answer) return
+                    setQaQuestion('')
+                    const assistantMessage = {
+                      id: createId('MSG'),
+                      role: 'assistant' as const,
+                      text: answer,
+                      citations,
+                      createdAt: Date.now(),
+                    }
+                    if (panelSummary) {
+                      const updatedMessages = [
+                        ...(panelSummary.messages ?? []).slice(0, -1),
+                        assistantMessage,
+                      ]
+                      const updated = { ...panelSummary, messages: updatedMessages }
+                      setPanelSummary(updated)
+                      persistSelectionSummary(updated)
+                    } else if (canvasSummary) {
+                      const updatedMessages = [...(canvasSummary.messages ?? []).slice(0, -1), assistantMessage]
+                      const updated = { ...canvasSummary, messages: updatedMessages }
+                      setCanvasSummary(updated)
+                      persistCanvasSummary(updated)
+                    }
+                  }}
+                >
+                  Ask
+                </button>
             </div>
-          )}
-          {canvasSummary && (
-            <div className="summary-panel-body">
-              {Object.entries(canvasSummary.sections).map(([heading, value]) => (
-                <div className="summary-section" key={heading}>
-                  <p className="summary-label">{heading}</p>
-                  <p className="summary-text">{value}</p>
-                </div>
-              ))}
-              {canvasSummary.evidence.length > 0 && (
-                <div className="summary-sources">
-                  <div className="summary-sources-header">
-                    <span className="summary-label">Evidence</span>
-                  </div>
-                  <div className="summary-sources-list">
-                    {canvasSummary.evidence.map((item, idx) => (
-                      <div className="summary-source-row" key={idx}>
-                        <span className="summary-source-label">{item}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
+          </div>
+        )}
         </aside>
       )}
     </div>

@@ -11,7 +11,7 @@ type BlockViewProps = {
   zoom: number
   onPositionChange: (id: string, x: number, y: number) => void
   onUpdate: (id: string, updater: (block: Block) => Block) => void
-  onSelect: (id: string, mode: 'single' | 'toggle') => void
+  onSelect: (block: Block, mode: 'single' | 'toggle') => void
   onDelete: (id: string) => void
   lookupBlock: (id: string) => Block | undefined
   onCitationHover: (ids: string[]) => void
@@ -50,6 +50,7 @@ export function BlockView({
   const startAnchorRef = useRef<HTMLAnchorElement | null>(null)
   const metaRef = useRef<HTMLDivElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const summaryRefBodyRef = useRef<HTMLDivElement | null>(null)
   const dragEnabledRef = useRef<boolean>(false)
   const hasDraggedRef = useRef(false)
   const previousUserSelectRef = useRef<string | null>(null)
@@ -200,7 +201,7 @@ export function BlockView({
     const targetEl = event.target as HTMLElement
     const isFormControl = ['INPUT', 'TEXTAREA', 'BUTTON'].includes(targetEl.tagName)
     if (isClick && !isFormControl) {
-      onSelect(block.id, event.shiftKey ? 'toggle' : 'single')
+      onSelect(block, event.shiftKey ? 'toggle' : 'single')
     }
     endDrag(event)
   }
@@ -262,6 +263,22 @@ export function BlockView({
     adjustTextareaSize()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [block.type === 'text' ? block.text : null])
+
+  useEffect(() => {
+    if (block.type !== 'summary_ref') return
+    const body = summaryRefBodyRef.current
+    if (!body) return
+    const contentHeight = body.scrollHeight
+    const headerHeight = 80
+    const padding = 24
+    const desiredHeight = Math.max(260, Math.min(720, contentHeight + headerHeight + padding))
+    if (!block.height || Math.abs(block.height - desiredHeight) > 4) {
+      onUpdate(block.id, (current) => {
+        if (current.type !== 'summary_ref') return current
+        return { ...current, height: desiredHeight }
+      })
+    }
+  }, [block.type === 'summary_ref' ? block.summaryText ?? block.preview : null])
 
   const summaryToPlainText = (summaryBlock: Extract<Block, { type: 'summary' }>) => {
     const sourceLines =
@@ -411,6 +428,7 @@ export function BlockView({
     top: block.y,
     width: block.width,
     ...(renderedHeight ? { height: renderedHeight } : {}),
+    ...(block.type === 'summary_ref' ? { backgroundColor: block.pastelColor } : {}),
   }
 
   return (
@@ -570,6 +588,23 @@ export function BlockView({
               </button>
             </div>
           )}
+        </div>
+      )}
+
+      {block.type === 'summary_ref' && (
+        <div className="summary-ref-card">
+          <div className="summary-ref-header">
+            <span className="summary-ref-pill">SUMMARY</span>
+            <span className="summary-ref-title">{block.title}</span>
+          </div>
+          <div className="summary-ref-body" ref={summaryRefBodyRef}>
+            {(block.summaryText ?? block.preview ?? '').split('\n').map((line: string, idx: number) => (
+              <p className="summary-ref-line" key={idx}>
+                {line}
+              </p>
+            ))}
+          </div>
+          <p className="summary-ref-hint">Click to highlight sources</p>
         </div>
       )}
 
