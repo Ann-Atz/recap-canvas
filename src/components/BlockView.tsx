@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { MouseEvent, PointerEvent } from 'react'
 import type { Block } from '../models/canvas'
 
@@ -33,6 +33,8 @@ export function BlockView({
   const startResizeRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null)
   const startPositionRef = useRef<{ x: number; y: number } | null>(null)
   const startAnchorRef = useRef<HTMLAnchorElement | null>(null)
+  const metaRef = useRef<HTMLDivElement | null>(null)
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const dragEnabledRef = useRef<boolean>(false)
   const hasDraggedRef = useRef(false)
   const previousUserSelectRef = useRef<string | null>(null)
@@ -104,7 +106,10 @@ export function BlockView({
     event.stopPropagation()
     if (event.button !== 0 && event.pointerType !== 'touch') return
     resizePointerIdRef.current = event.pointerId
-    startResizeRef.current = { x: event.clientX, y: event.clientY, width: block.width, height: block.height }
+    const baseHeight =
+      block.height ??
+      (block.type === 'text' && textareaRef.current ? textareaRef.current.scrollHeight + 34 : 120)
+    startResizeRef.current = { x: event.clientX, y: event.clientY, width: block.width, height: baseHeight }
     setIsResizing(true)
     disableSelection()
     event.currentTarget.setPointerCapture(event.pointerId)
@@ -180,10 +185,33 @@ export function BlockView({
     }
   }
 
+  const adjustTextareaSize = () => {
+    if (block.type !== 'text') return
+    const textarea = textareaRef.current
+    if (!textarea) return
+    textarea.style.height = 'auto'
+    const scrollHeight = textarea.scrollHeight
+    textarea.style.height = `${scrollHeight}px`
+    const metaHeight = metaRef.current?.offsetHeight ?? 0
+    const paddingY = 24 // block padding top+bottom (12px each)
+    const gapBetweenMetaAndContent = 10
+    const newHeight = paddingY + metaHeight + gapBetweenMetaAndContent + scrollHeight
+    onUpdate(block.id, (current) => {
+      if (current.type !== 'text') return current
+      if (current.height && Math.abs(current.height - newHeight) < 1) return current
+      return { ...current, height: newHeight }
+    })
+  }
+
   const handleDeleteClick = (event: MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation()
     onDelete(block.id)
   }
+
+  useEffect(() => {
+    adjustTextareaSize()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [block.type === 'text' ? block.text : null])
 
   const summaryToPlainText = (summaryBlock: Extract<Block, { type: 'summary' }>) => {
     const lines = [
@@ -223,7 +251,7 @@ export function BlockView({
     left: block.x,
     top: block.y,
     width: block.width,
-    height: block.height,
+    ...(block.height ? { height: block.height } : {}),
   }
 
   return (
@@ -235,7 +263,7 @@ export function BlockView({
       onPointerUp={handlePointerUp}
       onPointerCancel={handlePointerCancel}
     >
-      <div className="block-meta block-drag-handle">
+      <div className="block-meta block-drag-handle" ref={metaRef}>
         <div className="block-meta-left">
           <span className="block-type">{block.type}</span>
           <span className="block-id">{block.id}</span>
@@ -255,12 +283,23 @@ export function BlockView({
           onFocus={() => setIsEditingText(true)}
           onBlur={() => setIsEditingText(false)}
           value={block.text}
-          onChange={(e) =>
-            onUpdate(block.id, (current) => ({
-              ...current,
-              text: e.target.value,
-            }))
-          }
+          ref={textareaRef}
+          onChange={(e) => {
+            if (block.type !== 'text') return
+            const textarea = textareaRef.current
+            if (textarea) {
+              textarea.style.height = 'auto'
+              textarea.style.height = `${textarea.scrollHeight}px`
+            }
+            onUpdate(block.id, (current) => {
+              if (current.type !== 'text') return current
+              return {
+                ...current,
+                text: e.target.value,
+              }
+            })
+            adjustTextareaSize()
+          }}
         />
       )}
 
@@ -388,7 +427,10 @@ export function BlockView({
       {block.type === 'summary' && (
         <div className="block-summary">
           <div className="summary-header">
-            <h3>{block.title}</h3>
+            <div className="summary-title">
+              <span className="summary-badge">Summary</span>
+              <h3>{block.title}</h3>
+            </div>
             <button
               className="copy-summary"
               onClick={(e) => handleCopySummary(e, block)}

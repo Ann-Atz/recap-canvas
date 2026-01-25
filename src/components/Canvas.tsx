@@ -74,7 +74,6 @@ export function Canvas() {
       x: pos.x,
       y: pos.y,
       width: 340,
-      height: 140,
       createdAt: now,
       updatedAt: now,
     }
@@ -128,6 +127,7 @@ export function Canvas() {
   }
 
   const getSelectedBlocks = (): Block[] => blocks.filter((b) => selectedIds.includes(b.id))
+  const getBlockHeight = (block: Block) => block.height ?? 120
   const focusedSummary = (() => {
     const summaries = getSelectedBlocks().filter((b): b is SummaryBlock => b.type === 'summary')
     return summaries[0] ?? null
@@ -140,12 +140,13 @@ export function Canvas() {
     const minX = Math.min(...selected.map((b) => b.x))
     const maxX = Math.max(...selected.map((b) => b.x + b.width))
     const minY = Math.min(...selected.map((b) => b.y))
-    const maxY = Math.max(...selected.map((b) => b.y + b.height))
+    const maxY = Math.max(...selected.map((b) => b.y + getBlockHeight(b)))
     return { minX, maxX, minY, maxY }
   })()
 
   const intersects = (a: { x: number; y: number; width: number; height: number }, b: Block) => {
-    return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y
+    const bHeight = getBlockHeight(b)
+    return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + bHeight && a.y + a.height > b.y
   }
 
   const getSelectionRect = () => {
