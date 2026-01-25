@@ -35,11 +35,25 @@ export type SummarySections = {
   assumptions: string
 }
 
+export type Citation = {
+  n: number
+  blockIds: string[]
+}
+
+export type SummarySpan = {
+  start: number
+  end: number
+  citationNs: number[]
+}
+
 export type SummaryBlock = BlockBase & {
   type: 'summary'
   title: string
-  sections: SummarySections
+  sections?: SummarySections
   evidenceBlockIds: string[]
+  summaryText: string
+  citations: Citation[]
+  spans: SummarySpan[]
 }
 
 export type Block = TextBlock | ImageBlock | LinkBlock | SummaryBlock

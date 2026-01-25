@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useMemo } from 'react'
 import type React from 'react'
-import type { PointerEvent } from 'react'
+import type { PointerEvent as ReactPointerEvent } from 'react'
 import type { Block, SummaryBlock } from '../models/canvas'
 import { createId, seedBlocks } from '../models/canvas'
 import { summarizeSelection } from '../ai/summarize'
@@ -12,6 +12,16 @@ const CANVAS_HEIGHT = 1800
 const MIN_ZOOM = 0.4
 const MAX_ZOOM = 1.4
 type Tool = 'select' | 'text' | 'image' | 'link'
+
+type CanvasSummaryData = {
+  title: string
+  totalBlocks: number
+  sections: Record<string, string>
+  evidence: string[]
+}
+
+const SUMMARY_PANEL_MIN_WIDTH = 280
+const SUMMARY_PANEL_MAX_WIDTH = 720
 
 export function Canvas() {
   const initialBlocksRef = useRef<Block[] | null>(null)
@@ -28,6 +38,12 @@ export function Canvas() {
     return Math.min(2, Math.max(0.5, value))
   })
   const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [hoverHighlightIds, setHoverHighlightIds] = useState<string[]>([])
+  const [pinnedHighlightIds, setPinnedHighlightIds] = useState<string[]>([])
+  const [panelSummary, setPanelSummary] = useState<SummaryBlock | null>(null)
+  const [canvasSummary, setCanvasSummary] = useState<CanvasSummaryData | null>(null)
+  const [panelWidth, setPanelWidth] = useState<number>(360)
+  const panelResizeRef = useRef<{ startX: number; startWidth: number } | null>(null)
   const [selection, setSelection] = useState<{
     active: boolean
     pointerId: number | null
@@ -38,6 +54,9 @@ export function Canvas() {
   }>({ active: false, pointerId: null, originX: 0, originY: 0, currentX: 0, currentY: 0 })
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const didInitialCenterRef = useRef(false)
+  const blockLookup = useMemo(() => new Map(blocks.map((b) => [b.id, b])), [blocks])
+  const activeHighlightIds = pinnedHighlightIds.length ? pinnedHighlightIds : hoverHighlightIds
+  const activeHighlightSet = new Set(activeHighlightIds)
 
   const handlePositionChange = (id: string, x: number, y: number) => {
     setBlocks((prev) =>
@@ -72,6 +91,9 @@ export function Canvas() {
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         setActiveTool('select')
+        setPinnedHighlightIds([])
+        setHoverHighlightIds([])
+        panelResizeRef.current = null
       }
     }
     window.addEventListener('keydown', handleEscape)
@@ -150,12 +172,6 @@ export function Canvas() {
     }
     return block.height ?? 120
   }
-  const focusedSummary = (() => {
-    const summaries = getSelectedBlocks().filter((b): b is SummaryBlock => b.type === 'summary')
-    return summaries[0] ?? null
-  })()
-  const evidenceHighlightIds = new Set(focusedSummary?.evidenceBlockIds ?? [])
-
   const selectionBounds = (() => {
     const selected = getSelectedBlocks()
     if (selected.length === 0) return null
@@ -193,7 +209,120 @@ export function Canvas() {
     })
   }
 
-  const handleCanvasPointerDown = (event: PointerEvent<HTMLDivElement>) => {
+  const generateCanvasSummary = (allBlocks: Block[]): CanvasSummaryData => {
+    const baseBlocks = allBlocks.filter((b) => b.type !== 'summary')
+    const totalBlocks = baseBlocks.length
+    if (totalBlocks === 0) {
+      return {
+        title: 'Canvas summary',
+        totalBlocks: 0,
+        sections: {
+          'What this file seems to be about': 'No blocks on canvas.',
+          "What’s been explored so far": 'No blocks on canvas.',
+          'Things that look tentatively decided': 'No blocks on canvas.',
+          'Constraints or boundaries shaping the work': 'No blocks on canvas.',
+          'Open questions or unresolved tensions': 'No blocks on canvas.',
+          'What’s missing or unclear': 'Everything—canvas is empty.',
+          Evidence: '',
+        },
+        evidence: [],
+      }
+    }
+
+    const textBlocks = baseBlocks.filter((b): b is Extract<Block, { type: 'text' }> => b.type === 'text')
+    const linkBlocks = baseBlocks.filter((b): b is Extract<Block, { type: 'link' }> => b.type === 'link')
+    const imageBlocks = baseBlocks.filter((b): b is Extract<Block, { type: 'image' }> => b.type === 'image')
+
+    const gather = (regex: RegExp) => textBlocks.filter((b) => regex.test(b.text)).map((b) => b.text.trim())
+    const truncate = (t: string, max = 220) => {
+      const norm = t.replace(/\s+/g, ' ').trim()
+      return norm.length > max ? `${norm.slice(0, max - 1)}…` : norm
+    }
+
+    const what = textBlocks.length
+      ? truncate(textBlocks[0].text)
+      : 'Limited information about the overall intent; needs clearer framing.'
+    const explored = textBlocks.slice(1, 3).map((b) => truncate(b.text))
+    const decisions = gather(/decision|decided|draft/i)
+    const constraints = gather(/constraint|requires|must|cannot|no /i)
+    const questions = gather(/question|uncertain|uncertainty|not sure|tension|should|how do/i)
+
+    const evidence: string[] = []
+    const addEvidence = (label: string) => {
+      if (evidence.length >= 8) return
+      evidence.push(label)
+    }
+
+    textBlocks.slice(0, 4).forEach((b) => addEvidence(`block:${b.id} (text)`))
+    imageBlocks.slice(0, 2).forEach((b) => {
+      const desc = 'Image present (no caption provided).'
+      addEvidence(`block:${b.id} (image) — ${desc}`)
+    })
+    linkBlocks.slice(0, 2).forEach((b) => addEvidence(`block:${b.id} (link) — ${b.label} (${b.url})`))
+
+    const sections: Record<string, string> = {
+      'What this file seems to be about': what,
+      "What’s been explored so far": explored.length ? explored.join(' ') : 'Sparse notes on exploration; needs more articulation.',
+      'Things that look tentatively decided': decisions.length ? decisions.join(' ') : 'No clear decisions; everything reads as exploratory.',
+      'Constraints or boundaries shaping the work': constraints.length ? constraints.join(' ') : 'Constraints are weakly stated; call out must-haves explicitly.',
+      'Open questions or unresolved tensions': questions.length ? questions.join(' ') : 'Questions are implicit; make uncertainties explicit.',
+      'What’s missing or unclear': 'Success criteria, explicit user outcomes, and facilitation/flow details are not evident.',
+      Evidence: evidence.join('\n'),
+    }
+
+    return {
+      title: 'Canvas summary',
+      totalBlocks,
+      sections,
+      evidence,
+    }
+  }
+
+  const handleCitationHover = (ids: string[]) => {
+    if (pinnedHighlightIds.length) return
+    setHoverHighlightIds(ids)
+  }
+
+  const handleCitationLeave = () => {
+    if (pinnedHighlightIds.length) return
+    setHoverHighlightIds([])
+  }
+
+  const handleCitationClick = (ids: string[]) => {
+    setPinnedHighlightIds(ids)
+    setHoverHighlightIds([])
+    panToBlocks(ids)
+  }
+
+  const handleClearHighlight = () => {
+    setPinnedHighlightIds([])
+    setHoverHighlightIds([])
+  }
+
+  const handlePanelResizeStart = (event: ReactPointerEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    panelResizeRef.current = { startX: event.clientX, startWidth: panelWidth }
+    window.addEventListener('pointermove', handlePanelResizeMove)
+    window.addEventListener('pointerup', handlePanelResizeEnd)
+  }
+
+  const handlePanelResizeMove = (event: globalThis.PointerEvent) => {
+    if (!panelResizeRef.current) return
+    const delta = panelResizeRef.current.startX - event.clientX
+    const nextWidth = Math.min(
+      SUMMARY_PANEL_MAX_WIDTH,
+      Math.max(SUMMARY_PANEL_MIN_WIDTH, panelResizeRef.current.startWidth + delta)
+    )
+    setPanelWidth(nextWidth)
+  }
+
+  const handlePanelResizeEnd = () => {
+    panelResizeRef.current = null
+    window.removeEventListener('pointermove', handlePanelResizeMove)
+    window.removeEventListener('pointerup', handlePanelResizeEnd)
+  }
+
+  const handleCanvasPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.target !== event.currentTarget) return
     if (event.button !== 0 && event.pointerType !== 'touch') return
 
@@ -221,7 +350,7 @@ export function Canvas() {
     event.currentTarget.setPointerCapture(event.pointerId)
   }
 
-  const handleCanvasPointerMove = (event: PointerEvent<HTMLDivElement>) => {
+  const handleCanvasPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!selection.active || selection.pointerId !== event.pointerId) return
     const rect = event.currentTarget.getBoundingClientRect()
     const x = (event.clientX - rect.left) / zoom
@@ -229,7 +358,7 @@ export function Canvas() {
     setSelection((prev) => ({ ...prev, currentX: x, currentY: y }))
   }
 
-  const handleCanvasPointerEnd = (event: PointerEvent<HTMLDivElement>) => {
+  const handleCanvasPointerEnd = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!selection.active || selection.pointerId !== event.pointerId) return
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId)
@@ -361,9 +490,25 @@ export function Canvas() {
     })
   }
 
+  const panToBlocks = (ids: string[]) => {
+    if (!ids.length) return
+    const targetBlocks = blocks.filter((b) => ids.includes(b.id))
+    if (!targetBlocks.length) return
+    const minX = Math.min(...targetBlocks.map((b) => b.x))
+    const maxX = Math.max(...targetBlocks.map((b) => b.x + b.width))
+    const minY = Math.min(...targetBlocks.map((b) => b.y))
+    const maxY = Math.max(...targetBlocks.map((b) => b.y + getBlockHeight(b)))
+    ensureRectInView({
+      x: minX,
+      y: minY,
+      width: maxX - minX,
+      height: maxY - minY,
+    })
+  }
+
   const handleSummarize = () => {
     const selected = getSelectedBlocks()
-    if (selected.length < 2 || !selectionBounds) return
+    if (selected.length < 1 || !selectionBounds) return
     const content = summarizeSelection(selected)
     const summarySize = { width: 360, height: 260 }
     const position = computeSummaryPosition(summarySize)
@@ -371,8 +516,11 @@ export function Canvas() {
       id: createId('SUM'),
       type: 'summary',
       title: content.title,
-      sections: content.sections,
+      sections: undefined,
       evidenceBlockIds: content.evidenceBlockIds,
+      summaryText: content.summaryText,
+      citations: content.citations,
+      spans: content.spans,
       x: position.x,
       y: position.y,
       width: summarySize.width,
@@ -381,6 +529,7 @@ export function Canvas() {
       updatedAt: new Date().toISOString(),
     }
     setBlocks((prev) => [...prev, newSummary])
+    setPanelSummary(newSummary)
 
     const selectionRect = selectionBounds
     const summaryRect = {
@@ -446,6 +595,16 @@ export function Canvas() {
       {import.meta.env.DEV && (
         <div className="dev-reset">
           <button
+            className="summarize-canvas-btn"
+            onClick={() => {
+              setPanelSummary(null)
+              const summary = generateCanvasSummary(blocks)
+              setCanvasSummary(summary)
+            }}
+          >
+            Summarize canvas
+          </button>
+          <button
             className="dev-reset-btn"
             onClick={() => {
               const confirmReset = window.confirm('Resets the canvas to the original handover state. Changes made this session will be cleared.')
@@ -477,7 +636,7 @@ export function Canvas() {
         onPointerCancel={handleCanvasPointerEnd}
         onWheel={handleWheelZoom}
       >
-        {selectionBounds && selectedIds.length >= 2 && (
+        {selectionBounds && selectedIds.length >= 1 && (
           <button
             className="summarize-action"
             style={{
@@ -499,8 +658,8 @@ export function Canvas() {
             key={block.id}
             block={block}
             selected={selectedIds.includes(block.id)}
-            highlight={focusedSummary ? (block.type === 'summary' && focusedSummary.id === block.id) || evidenceHighlightIds.has(block.id) : false}
-            dimmed={Boolean(focusedSummary && !evidenceHighlightIds.has(block.id) && block.id !== focusedSummary.id)}
+            highlight={activeHighlightSet.has(block.id)}
+            dimmed={activeHighlightSet.size > 0 && !activeHighlightSet.has(block.id)}
             zoom={zoom}
             onPositionChange={handlePositionChange}
             onUpdate={handleUpdateBlock}
@@ -514,6 +673,13 @@ export function Canvas() {
                 )
               }
             }}
+            lookupBlock={(id) => blockLookup.get(id)}
+            onCitationHover={handleCitationHover}
+            onCitationLeave={handleCitationLeave}
+            onCitationClick={handleCitationClick}
+            onClearHighlight={handleClearHighlight}
+            hasPinnedHighlight={pinnedHighlightIds.length > 0}
+            activeHighlightIds={activeHighlightIds}
           />
         ))}
         {selection.active && (() => {
@@ -527,6 +693,82 @@ export function Canvas() {
           )
         })()}
       </div>
+      {(panelSummary || canvasSummary) && (
+        <aside className="summary-panel" style={{ width: `${panelWidth}px` }}>
+          <div
+            className="summary-panel-resize"
+            onPointerDown={handlePanelResizeStart}
+            role="separator"
+            aria-label="Resize summary panel"
+          />
+          <div className="summary-panel-header">
+            <div className="summary-panel-title">
+              <span className="summary-badge">Summary</span>
+              <h3>{panelSummary ? panelSummary.title : 'Canvas summary'}</h3>
+              {canvasSummary && <p className="summary-subtitle">Summary of {canvasSummary.totalBlocks} blocks</p>}
+            </div>
+            <button
+              className="summary-panel-close"
+              onClick={() => {
+                setPanelSummary(null)
+                setCanvasSummary(null)
+              }}
+            >
+              Close
+            </button>
+          </div>
+          {panelSummary && (
+            <div className="summary-panel-body">
+              {(panelSummary.summaryText || '').split('\n').map((line, idx) => (
+                <p className="summary-text" key={idx}>
+                  {line}
+                </p>
+              ))}
+              {panelSummary.citations?.length > 0 && (
+                <div className="summary-sources">
+                  <div className="summary-sources-header">
+                    <span className="summary-label">Sources</span>
+                  </div>
+                  <div className="summary-sources-list">
+                    {panelSummary.citations.map((c) => (
+                      <div className="summary-source-row" key={c.n}>
+                        <span className="summary-source-n">{c.n}</span>
+                        <span className="summary-source-label">
+                          {c.blockIds.map((id) => `block:${id}`).join(', ')}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          {canvasSummary && (
+            <div className="summary-panel-body">
+              {Object.entries(canvasSummary.sections).map(([heading, value]) => (
+                <div className="summary-section" key={heading}>
+                  <p className="summary-label">{heading}</p>
+                  <p className="summary-text">{value}</p>
+                </div>
+              ))}
+              {canvasSummary.evidence.length > 0 && (
+                <div className="summary-sources">
+                  <div className="summary-sources-header">
+                    <span className="summary-label">Evidence</span>
+                  </div>
+                  <div className="summary-sources-list">
+                    {canvasSummary.evidence.map((item, idx) => (
+                      <div className="summary-source-row" key={idx}>
+                        <span className="summary-source-label">{item}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </aside>
+      )}
     </div>
   )
 }

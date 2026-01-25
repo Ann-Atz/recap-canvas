@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import type React from 'react'
 import type { MouseEvent, PointerEvent } from 'react'
 import type { Block } from '../models/canvas'
 
@@ -12,6 +13,13 @@ type BlockViewProps = {
   onUpdate: (id: string, updater: (block: Block) => Block) => void
   onSelect: (id: string, mode: 'single' | 'toggle') => void
   onDelete: (id: string) => void
+  lookupBlock: (id: string) => Block | undefined
+  onCitationHover: (ids: string[]) => void
+  onCitationLeave: () => void
+  onCitationClick: (ids: string[]) => void
+  onClearHighlight: () => void
+  hasPinnedHighlight: boolean
+  activeHighlightIds: string[]
 }
 
 const DRAG_THRESHOLD = 6
@@ -26,6 +34,13 @@ export function BlockView({
   onUpdate,
   onSelect,
   onDelete,
+  lookupBlock,
+  onCitationHover,
+  onCitationLeave,
+  onCitationClick,
+  onClearHighlight,
+  hasPinnedHighlight,
+  activeHighlightIds,
 }: BlockViewProps) {
   const pointerIdRef = useRef<number | null>(null)
   const resizePointerIdRef = useRef<number | null>(null)
@@ -249,25 +264,129 @@ export function BlockView({
   }, [block.type === 'text' ? block.text : null])
 
   const summaryToPlainText = (summaryBlock: Extract<Block, { type: 'summary' }>) => {
-    const lines = [
-      summaryBlock.title,
-      '',
-      'What this area is about',
-      summaryBlock.sections.what,
-      '',
-      'Key decisions',
-      summaryBlock.sections.decisions,
-      '',
-      'Constraints',
-      summaryBlock.sections.constraints,
-      '',
-      'Assumptions / open questions',
-      summaryBlock.sections.assumptions,
-      '',
-      'Evidence',
-      summaryBlock.evidenceBlockIds.map((id) => `block:${id}`).join(', '),
-    ]
+    const sourceLines =
+      summaryBlock.citations?.map((c) => `${c.n} — ${c.blockIds.join(', ')}`) ??
+      summaryBlock.evidenceBlockIds.map((id, idx) => `${idx + 1} — ${id}`)
+    const lines = [summaryBlock.title, '', summaryBlock.summaryText ?? '', '', 'Sources', ...sourceLines]
     return lines.join('\n')
+  }
+
+  const SummaryWithCitations = ({
+    block,
+    lookupBlock,
+    onCitationHover,
+    onCitationLeave,
+    onCitationClick,
+    activeHighlightIds,
+  }: {
+    block: Extract<Block, { type: 'summary' }>
+    lookupBlock: (id: string) => Block | undefined
+    onCitationHover: (ids: string[]) => void
+    onCitationLeave: () => void
+    onCitationClick: (ids: string[]) => void
+    activeHighlightIds: string[]
+  }) => {
+    const activeHighlightSet = new Set(activeHighlightIds)
+    const citations =
+      (block.citations && block.citations.length
+        ? block.citations
+        : block.evidenceBlockIds.map((id, idx) => ({ n: idx + 1, blockIds: [id] }))) ?? []
+    const citationMap = new Map(citations.map((c) => [c.n, c]))
+
+    const fallbackLines =
+      block.sections && block.sections.what
+        ? [
+            `• ${block.sections.what}`,
+            `• ${block.sections.decisions}`,
+            `• ${block.sections.constraints}`,
+            `• ${block.sections.assumptions}`,
+          ]
+        : []
+
+    const lines = (block.summaryText || '').split('\n').filter((l) => l.trim().length > 0)
+    const effectiveLines = lines.length ? lines : fallbackLines
+
+    let cursor = 0
+    const spans = (block.spans && block.spans.length ? block.spans : null) ?? []
+    const resolvedLines = effectiveLines.map((line) => {
+      const start = cursor
+      const end = cursor + line.length
+      cursor = end + 1
+      const spanMatch = spans.find((s) => s.start === start && s.end === end)
+      const citationNs =
+        spanMatch?.citationNs && spanMatch.citationNs.length ? spanMatch.citationNs : citations.map((c) => c.n)
+      return { line, start, end, citationNs }
+    })
+
+    return (
+      <div className="summary-body">
+        <div className="summary-lines">
+          {resolvedLines.map(({ line, citationNs, start }) => {
+            const citationEntries = citationNs
+              .map((n) => citationMap.get(n))
+              .filter(Boolean) as { n: number; blockIds: string[] }[]
+            return (
+              <div className="summary-line" key={start}>
+                <span className="summary-text">{line}</span>
+                <span className="summary-citations">
+                  {citationEntries.map((c) => {
+                    const isActive = c.blockIds.every((id) => activeHighlightSet.has(id))
+                    return (
+                      <button
+                        key={c.n}
+                        className={`citation-chip ${isActive ? 'active' : ''}`}
+                        onMouseEnter={() => onCitationHover(c.blockIds)}
+                        onMouseLeave={onCitationLeave}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          onCitationClick(c.blockIds)
+                        }}
+                        onPointerDown={(e) => e.stopPropagation()}
+                      >
+                        {c.n}
+                      </button>
+                    )
+                  })}
+                </span>
+              </div>
+            )
+          })}
+        </div>
+        <div className="summary-sources">
+          <div className="summary-sources-header">
+            <span className="summary-label">Sources</span>
+          </div>
+          <div className="summary-sources-list">
+            {citations.map((c) => {
+              const blockLabels = c.blockIds
+                .map((id) => {
+                  const found = lookupBlock(id)
+                  const typeLabel = found ? found.type : 'unknown'
+                  return `block:${id} (${typeLabel})`
+                })
+                .join(', ')
+              const isActive = c.blockIds.every((id) => activeHighlightSet.has(id))
+              return (
+                <button
+                  key={c.n}
+                  className={`summary-source-row ${isActive ? 'active' : ''}`}
+                  onMouseEnter={() => onCitationHover(c.blockIds)}
+                  onMouseLeave={onCitationLeave}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onCitationClick(c.blockIds)
+                  }}
+                  onPointerDown={(e) => e.stopPropagation()}
+                >
+                  <span className="summary-source-n">{c.n}</span>
+                  <span className="summary-source-label">{blockLabels}</span>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      </div>
+    )
   }
 
   const handleCopySummary = async (
@@ -461,36 +580,36 @@ export function BlockView({
               <span className="summary-badge">Summary</span>
               <h3>{block.title}</h3>
             </div>
-            <button
-              className="copy-summary"
-              onClick={(e) => handleCopySummary(e, block)}
-              onPointerDown={(e) => e.stopPropagation()}
-            >
-              Copy summary
-            </button>
-          </div>
-          <div className="summary-body">
-            <div className="summary-section">
-              <p className="summary-label">What</p>
-              <p className="summary-text">{block.sections.what}</p>
-            </div>
-            <div className="summary-section">
-              <p className="summary-label">Decisions</p>
-              <p className="summary-text">{block.sections.decisions}</p>
-            </div>
-            <div className="summary-section">
-              <p className="summary-label">Constraints</p>
-              <p className="summary-text">{block.sections.constraints}</p>
-            </div>
-            <div className="summary-section">
-              <p className="summary-label">Assumptions</p>
-              <p className="summary-text">{block.sections.assumptions}</p>
-            </div>
-            <div className="summary-evidence">
-              <p className="summary-label">Evidence</p>
-              <p className="summary-text">{block.evidenceBlockIds.map((id) => `block:${id}`).join(', ')}</p>
+            <div className="summary-actions">
+              {hasPinnedHighlight && (
+                <button
+                  className="summary-clear-highlight"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onClearHighlight()
+                  }}
+                  onPointerDown={(e) => e.stopPropagation()}
+                >
+                  Clear highlight
+                </button>
+              )}
+              <button
+                className="copy-summary"
+                onClick={(e) => handleCopySummary(e, block)}
+                onPointerDown={(e) => e.stopPropagation()}
+              >
+                Copy summary
+              </button>
             </div>
           </div>
+          <SummaryWithCitations
+            block={block}
+            lookupBlock={lookupBlock}
+            onCitationHover={onCitationHover}
+            onCitationLeave={onCitationLeave}
+            onCitationClick={onCitationClick}
+            activeHighlightIds={activeHighlightIds}
+          />
         </div>
       )}
 
