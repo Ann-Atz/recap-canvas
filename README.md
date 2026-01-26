@@ -43,3 +43,4 @@ npm run lint
    ```bash
    npm run dev
    ```
+3) In the app, toggle on “Use GPT (demo)” to send summaries/QA to the local server (port 8787). If GPT fails, the app falls back to the built-in mock summarizer and shows a toast.

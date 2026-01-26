@@ -90,19 +90,20 @@ Frontend
 •	React + TypeScript
 •	Minimal CSS (no heavy design system)
 Backend
-•	None (client-side only for V1)
+•	Client-side first, with optional local Node/Express backend for GPT summarization/Q&A (OpenAI)
 State & Persistence
 •	localStorage for canvas state and blocks.
 AI Integration
 •	AI summarization function:
-o	Initially mocked or API-backed.
+o	Mocked by default; optional GPT path via local backend proxy.
+o	Selection summaries and side-panel Q&A fall back to mock if GPT fails.
 o	Receives only explicitly selected content.
 Deployment
-•	Local prototype or static deployment (course scope).
+•	Local prototype or static deployment (course scope). GPT demo requires running the local backend on 8787.
 Security / Privacy
 •	No analytics in V1.
 •	No background data ingestion.
-•	AI receives no hidden or inferred context.
+•	AI receives no hidden or inferred context; API key kept server-side only.
  
 5) Feature Modules
 Module 1 — Canvas & Blocks (P0)
@@ -202,4 +203,3 @@ Rollout
 •	Demo-driven evaluation for course submission.
 Maintenance
 •	None beyond prototype scope.
-
