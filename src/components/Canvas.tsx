@@ -81,6 +81,9 @@ export function Canvas() {
   const chatBottomRef = useRef<HTMLDivElement | null>(null)
   const activeSummary = panelSummary ?? canvasSummary
   const activeMessages = activeSummary?.messages ?? []
+  const [useGpt, setUseGpt] = useState<boolean>(false)
+  const [toastMessage, setToastMessage] = useState<string | null>(null)
+  const toastTimeoutRef = useRef<number | null>(null)
 
   const CitationChip = ({
     citation,
@@ -149,6 +152,14 @@ export function Canvas() {
   const blockLookup = useMemo(() => new Map(blocks.map((b) => [b.id, b])), [blocks])
   const activeHighlightIds = pinnedHighlightIds.length ? pinnedHighlightIds : hoverHighlightIds
   const activeHighlightSet = new Set(activeHighlightIds)
+
+  const showToast = (message: string) => {
+    if (toastTimeoutRef.current) {
+      window.clearTimeout(toastTimeoutRef.current)
+    }
+    setToastMessage(message)
+    toastTimeoutRef.current = window.setTimeout(() => setToastMessage(null), 4000)
+  }
 
   const handlePositionChange = (id: string, x: number, y: number) => {
     setBlocks((prev) =>
@@ -228,6 +239,14 @@ export function Canvas() {
     if (!chatBottomRef.current) return
     chatBottomRef.current.scrollIntoView({ behavior: 'smooth' })
   }, [panelSummary?.messages, canvasSummary?.messages])
+
+  useEffect(() => {
+    return () => {
+      if (toastTimeoutRef.current) {
+        window.clearTimeout(toastTimeoutRef.current)
+      }
+    }
+  }, [])
 
   const addTextBlock = (position: { x: number; y: number }) => {
     const now = new Date().toISOString()
@@ -827,10 +846,114 @@ export function Canvas() {
     setBlocks((prev) => [...prev, block])
   }
 
-  const handleSummarize = () => {
+  const formatBlocksForApi = (selected: Block[]) =>
+    selected.map((b) => {
+      if (b.type === 'text') {
+        return { id: b.id, type: b.type, text: b.text }
+      }
+      if (b.type === 'link') {
+        return { id: b.id, type: b.type, label: b.label, url: b.url }
+      }
+      if (b.type === 'image') {
+        return { id: b.id, type: b.type, caption: b.src }
+      }
+      if (b.type === 'summary') {
+        return { id: b.id, type: b.type, text: b.summaryText }
+      }
+      if (b.type === 'summary_ref') {
+        return { id: b.id, type: b.type, text: b.summaryText ?? b.preview ?? '', label: b.title }
+      }
+      return { id: b.id, type: b.type }
+    })
+
+  const summarizeWithGpt = async (selected: Block[]) => {
+    const payload = {
+      mode: 'selection' as const,
+      blocks: formatBlocksForApi(selected),
+    }
+    try {
+      const response = await fetch('/api/summarize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        const message = (data as any)?.error || 'GPT unavailable — using mock summary.'
+        if (response.status >= 500) {
+          console.warn('GPT summarize failed', response.status, message)
+          showToast('GPT unavailable — using mock summary.')
+          return { fallback: true }
+        }
+        showToast(message)
+        return { abort: true }
+      }
+      const summaryText = (data as any)?.summaryText
+      if (!summaryText || typeof summaryText !== 'string') {
+        throw new Error('Invalid response from GPT')
+      }
+      return { summaryText }
+    } catch (err) {
+      console.warn('GPT summarize failed', err)
+      showToast('GPT unavailable — using mock summary.')
+      return { fallback: true }
+    }
+  }
+
+  const askWithGpt = async (question: string, scopeBlocks: Block[]) => {
+    const payload = {
+      question,
+      blocks: formatBlocksForApi(scopeBlocks),
+    }
+    try {
+      const response = await fetch('/api/ask', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        const message = (data as any)?.error || 'GPT unavailable — using mock answer.'
+        if (response.status >= 500) {
+          console.warn('GPT ask failed', response.status, message)
+          showToast('GPT unavailable — using mock answer.')
+          return { fallback: true }
+        }
+        showToast(message)
+        return { abort: true }
+      }
+      const answerText = (data as any)?.answerText
+      if (!answerText || typeof answerText !== 'string') {
+        throw new Error('Invalid answer from GPT')
+      }
+      return { answerText }
+    } catch (err) {
+      console.warn('GPT ask failed', err)
+      showToast('GPT unavailable — using mock answer.')
+      return { fallback: true }
+    }
+  }
+
+  const handleSummarize = async () => {
     const selected = getSelectedBlocks()
     if (selected.length < 1 || !selectionBounds || hasSummaryRefSelected) return
     const content = summarizeSelection(selected)
+    let summaryText = content.summaryText
+    let citations = content.citations
+    let spans = content.spans
+
+    if (useGpt) {
+      const result = await summarizeWithGpt(selected)
+      if (result?.abort) return
+      if (result?.summaryText) {
+        summaryText = result.summaryText
+        citations = []
+        spans = []
+      } else if (result?.fallback) {
+        // keep mock content
+      }
+    }
+
     const summarySize = { width: 360, height: 260 }
     const newSummary: SummaryBlock = {
       id: createId('SUM'),
@@ -838,9 +961,9 @@ export function Canvas() {
       title: content.title,
       sections: undefined,
       evidenceBlockIds: content.evidenceBlockIds,
-      summaryText: content.summaryText,
-      citations: content.citations,
-      spans: content.spans,
+      summaryText,
+      citations,
+      spans,
       scope: { kind: 'selection', blockIds: selected.map((b) => b.id) },
       qa: [],
       messages: [],
@@ -905,6 +1028,17 @@ export function Canvas() {
       </div>
       {import.meta.env.DEV && (
         <div className="dev-reset">
+          <div className="gpt-toggle">
+            <label>
+              <input
+                type="checkbox"
+                checked={useGpt}
+                onChange={(e) => setUseGpt(e.target.checked)}
+              />
+              <span>Use GPT (demo)</span>
+            </label>
+            <span className="gpt-toggle-hint">Off by default; falls back to mock.</span>
+          </div>
           <button
             className="summarize-canvas-btn"
             onClick={() => {
@@ -960,7 +1094,7 @@ export function Canvas() {
             }}
             onClick={(e) => {
               e.stopPropagation()
-              handleSummarize()
+              void handleSummarize()
             }}
             onPointerDown={(e) => e.stopPropagation()}
           >
@@ -1113,6 +1247,18 @@ export function Canvas() {
                   ))}
                   <div ref={chatBottomRef} />
                 </div>
+                {activeMessages.some((m) => m.role === 'user') && (
+                  <div className="asked-questions">
+                    <p className="summary-label">Asked questions</p>
+                    <ul>
+                      {activeMessages
+                        .filter((m): m is Extract<typeof m, { role: 'user' }> => m.role === 'user')
+                        .map((m) => (
+                          <li key={m.id}>{m.text}</li>
+                        ))}
+                    </ul>
+                  </div>
+                )}
               </>
             )}
           </div>
@@ -1132,10 +1278,11 @@ export function Canvas() {
                 <button
                   onClick={() => {
                     if (!qaQuestion.trim()) return
+                    const questionText = qaQuestion.trim()
                     const userMessage = {
                       id: createId('MSG'),
                       role: 'user' as const,
-                      text: qaQuestion.trim(),
+                      text: questionText,
                       createdAt: Date.now(),
                     }
                     const thinkingMessage = {
@@ -1159,36 +1306,89 @@ export function Canvas() {
                     const targetSummary = panelSummary ?? canvasSummary
                     if (!targetSummary) return
                     const targetScope = targetSummary.scope
-                    const { answer, citations } = generateQaAnswer(
-                      qaQuestion,
-                      targetScope.blockIds,
-                      targetSummary.summaryText,
-                      targetSummary.spans,
-                      targetSummary.citations
-                    )
-                    if (!answer) return
-                    setQaQuestion('')
-                    const assistantMessage = {
-                      id: createId('MSG'),
-                      role: 'assistant' as const,
-                      text: answer,
-                      citations,
-                      createdAt: Date.now(),
+                    const scopeBlocks = targetScope.blockIds
+                      .map((id) => blockLookup.get(id))
+                      .filter((b): b is Block => Boolean(b))
+                    const useGptForQa = useGpt && scopeBlocks.length > 0
+                    const finishWithMessage = (assistantMessage: {
+                      id: string
+                      role: 'assistant'
+                      text: string
+                      citations: { n: number; blockIds: string[] }[]
+                      createdAt: number
+                    }) => {
+                      setQaQuestion('')
+                      if (panelSummary) {
+                        const updatedMessages = [
+                          ...(panelSummary.messages ?? []).slice(0, -1),
+                          assistantMessage,
+                        ]
+                        const updated = { ...panelSummary, messages: updatedMessages }
+                        setPanelSummary(updated)
+                        persistSelectionSummary(updated)
+                      } else if (canvasSummary) {
+                        const updatedMessages = [
+                          ...(canvasSummary.messages ?? []).slice(0, -1),
+                          assistantMessage,
+                        ]
+                        const updated = { ...canvasSummary, messages: updatedMessages }
+                        setCanvasSummary(updated)
+                        persistCanvasSummary(updated)
+                      }
                     }
-                    if (panelSummary) {
-                      const updatedMessages = [
-                        ...(panelSummary.messages ?? []).slice(0, -1),
-                        assistantMessage,
-                      ]
-                      const updated = { ...panelSummary, messages: updatedMessages }
-                      setPanelSummary(updated)
-                      persistSelectionSummary(updated)
-                    } else if (canvasSummary) {
-                      const updatedMessages = [...(canvasSummary.messages ?? []).slice(0, -1), assistantMessage]
-                      const updated = { ...canvasSummary, messages: updatedMessages }
-                      setCanvasSummary(updated)
-                      persistCanvasSummary(updated)
+
+                    const handleAbort = () => {
+                      if (panelSummary) {
+                        const trimmed = (panelSummary.messages ?? []).slice(0, -1)
+                        const updated = { ...panelSummary, messages: trimmed }
+                        setPanelSummary(updated)
+                        persistSelectionSummary(updated)
+                      } else if (canvasSummary) {
+                        const trimmed = (canvasSummary.messages ?? []).slice(0, -1)
+                        const updated = { ...canvasSummary, messages: trimmed }
+                        setCanvasSummary(updated)
+                        persistCanvasSummary(updated)
+                      }
                     }
+
+                    const runQa = async () => {
+                      if (useGptForQa) {
+                        const result = await askWithGpt(questionText, scopeBlocks)
+                        if (result?.abort) {
+                          handleAbort()
+                          return
+                        }
+                        if (result?.answerText) {
+                          return finishWithMessage({
+                            id: createId('MSG'),
+                            role: 'assistant',
+                            text: result.answerText,
+                            citations: [],
+                            createdAt: Date.now(),
+                          })
+                        }
+                        // fallback to mock if requested
+                      }
+                      const { answer, citations } = generateQaAnswer(
+                        questionText,
+                        targetScope.blockIds,
+                        targetSummary.summaryText,
+                        targetSummary.spans,
+                        targetSummary.citations
+                      )
+                      if (!answer) {
+                        handleAbort()
+                        return
+                      }
+                      finishWithMessage({
+                        id: createId('MSG'),
+                        role: 'assistant',
+                        text: answer,
+                        citations,
+                        createdAt: Date.now(),
+                      })
+                    }
+                    void runQa()
                   }}
                 >
                   Ask
@@ -1197,6 +1397,11 @@ export function Canvas() {
           </div>
         )}
         </aside>
+      )}
+      {toastMessage && (
+        <div className="toast" role="status">
+          {toastMessage}
+        </div>
       )}
     </div>
   )

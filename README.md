@@ -30,3 +30,16 @@ Run ESLint across the project:
 ```bash
 npm run lint
 ```
+
+## GPT Integration (Optional Demo)
+1) In a new terminal, start the backend with your key:
+   ```bash
+   cd server
+   cp .env.example .env   # add your OPENAI_API_KEY
+   npm install
+   npm run dev
+   ```
+2) From the repo root, run the frontend:
+   ```bash
+   npm run dev
+   ```
